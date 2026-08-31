@@ -1,10 +1,10 @@
 /* Tesla Fleet Card
    A Tesla-app-style, multi-car Lovelace card for Home Assistant.
    Works with both the tesla_custom (HACS) and official tesla_fleet
-   integrations — auto-detected per car.
+   integrations - auto-detected per car.
    Install guide, all options, and the image-pack spec live in the README:
    https://github.com/MrNickIE/tesla-fleet-homeassistant
-   Built by Claude in conversation with MrNickIE — MIT licence, share freely. */
+   Built by Claude in conversation with MrNickIE - MIT licence, share freely. */
 (function () {
   "use strict";
 
@@ -58,7 +58,7 @@
     cop: "select.{p}cabin_overheat_protection",
   };
 
-  /* Official tesla_fleet integration — same keys, its own entity naming.
+  /* Official tesla_fleet integration - same keys, its own entity naming.
      Empty string = the integration has no such entity (the card hides that feature). */
   const PATTERNS_FLEET = {
     battery: "sensor.{p}battery_level",
@@ -119,7 +119,7 @@
 
   /* Packs that ship with the repo. Keep in step with images/models/. The card
      lists these when a car has no pack of its own, so nobody is left guessing
-     what exists — and so an unsupported combination is a nudge to build one
+     what exists - and so an unsupported combination is a nudge to build one
      rather than a dead end. */
   const PACKS_SHIPPED = [
     { model: "Model Y", paint: "red", dir: "models/y/red/app" },
@@ -190,14 +190,14 @@
   /* -- Defrost glow ----------------------------------------------------------
      Measured off Nick's own app screen recording (ffmpeg, 15fps sampling of a
      4s window), rather than guessed:
-       * the REAR screen is a flat vertical gradient — deep at the roofline,
-         brightest at the outer edge (redness ramps ~4.4x top to bottom) — and
+       * the REAR screen is a flat vertical gradient - deep at the roofline,
+         brightest at the outer edge (redness ramps ~4.4x top to bottom) - and
          is COMPLETELY STATIC: 0.06 variation over 7 seconds.
        * the WINDSCREEN band breathes on a 4.0s cycle at about +/-12%. Only
          that band moves; a control patch of cabin measured 0.09 over the same
          window, so it is the glow, not the view shifting.
        * the vent mist cones are NOT drawn while defrost runs.
-       * climate off means defrost off — the app drops both together.
+       * climate off means defrost off - the app drops both together.
      The climate-view geometry is NOT hand-traced. The recording contains the
      same view with defrost on and off, and the car render is identical between
      them (body patches differ by ~1/255), so differencing the two frames yields
@@ -206,7 +206,7 @@
      was warped into pack-image space by matching car bounding boxes, giving the
      outlines and per-row alpha below. Two things it settled: the glows are
      broad soft washes over each END OF THE CABIN, not tight glass polygons, and
-     the wing mirrors do NOT tint. Colours are NOT from the recording — that
+     the wing mirrors do NOT tint. Colours are NOT from the recording - that
      phone had a warm colour filter on (its Control Centre is orange too). */
   const DF_ANIM = '<animate attributeName="opacity" dur="4s" repeatCount="indefinite" ' +
     'keyTimes="0;0.155;0.43;0.58;0.72;0.885;1" values=".95;.79;1;.84;.91;.82;.95" ' +
@@ -223,13 +223,13 @@
   /* The same two profiles serve every view. A symmetric "fills the pane" curve
      was tried on the top-down and 3/4 renders and was wrong: side by side with
      Nick's screenshot the app's rear-screen tint sits LOW in the pane, hugging
-     the shut line and fading upward — exactly the measured rear profile. */
+     the shut line and fading upward - exactly the measured rear profile. */
 
   /* Peaks and colour. clim_* are the video-measured view and are left alone.
      The pane_* set is used on the views with no reference; its colour is more
      saturated because a composite match against the reference screenshot showed
      the old one going muddy: brightest pixels measured RGB 155/67/52 against the
-     app's 108/39/31 — brighter in red but far greyer, which reads as dark. */
+     app's 108/39/31 - brighter in red but far greyer, which reads as dark. */
   /* Radial falloff for the 3/4 rear renders. Reaching zero at the shape's edge
      means the tint physically cannot appear outside its outline. */
   const DF_BLOB = [[0, 1], [.45, .97], [.62, .90], [.75, .72], [.86, .47], [.94, .22], [1, 0]];
@@ -293,8 +293,8 @@
 
   /* --- Fitting the outlines to whatever pack is actually on screen ---------
      Every outline below was traced against the bundled pack's photos. A
-     different pack frames the car differently — Patsy's Model Y climate render
-     is 14% wider and 11% taller than the bundled Model 3 one and sits shifted —
+     different pack frames the car differently - Patsy's Model Y climate render
+     is 14% wider and 11% taller than the bundled Model 3 one and sits shifted -
      so the same coordinates land small and high on it, which is exactly how
      this was found. DF_CALIB records the car's bounding box in the image each
      view was traced against; at render time the card measures the car box in
@@ -518,7 +518,7 @@
       return p.val;
     }
     /* Ask the car for fresh data shortly after a command instead of waiting for
-       the next poll. Only ever after a command — never on a timer, because this
+       the next poll. Only ever after a command - never on a timer, because this
        wakes the car and spends API calls. */
     _nudgeRefresh() {
       const id = this._car && this._car._entities && this._car._entities.refresh;
@@ -654,7 +654,7 @@
       const dir = /3/.test(String(car.model || "")) ? "3" : "y";
       const paint = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
       // /local first: a pack in /config/www/tesla-fleet-card/ always wins.
-      // Then the repo itself over GitHub raw — always current, updates on a
+      // Then the repo itself over GitHub raw - always current, updates on a
       // plain push. hacsfiles LAST: HACS only manages the JS file for
       // dashboard plugins and never updates or removes an images tree it once
       // laid down, so anything found there is likely stale.
@@ -838,7 +838,7 @@
   svg.ovl { position:absolute; left:0; top:0; width:100%; height:100%; }
   svg.car text { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; }
   .tapa { cursor:pointer; }
-  /* mist animation is SMIL (in the SVG markup) — CSS transforms on filtered
+  /* mist animation is SMIL (in the SVG markup) - CSS transforms on filtered
      SVG elements don't animate on iOS WebKit (HA companion app) */
   .climX { margin-top:8px; text-align:left; padding-left:14px; }
   .climX.on { color:#4fa3ff; }
@@ -908,8 +908,8 @@
     <div style="position:relative">
       <button class="nmBtn" id="nmBtn"><span class="nm">${car.name}</span>${svgIcon(ICONS.chev)}</button>
       <div class="battLine"><span class="battGlyph"><span class="battFill" id="battFill"></span></span>
-        <span id="battTxt">—</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
-      <div class="sub" id="sub">—</div>
+        <span id="battTxt">-</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
+      <div class="sub" id="sub">-</div>
       <div class="diag" id="diag" hidden></div>
       <div class="carMenu" id="carMenu" hidden></div>
     </div>
@@ -931,20 +931,20 @@
   <div class="rows">
     <div class="row" id="rowClim">
       <button class="rowHead" id="headClim">${svgIcon(ICONS.fan, "ric")}
-        <span><span class="rTitle">Climate</span><div class="rSub" id="climSub">—</div></span>
+        <span><span class="rTitle">Climate</span><div class="rSub" id="climSub">-</div></span>
         ${svgIcon(ICONS.chevR, "chev")}</button>
 
     </div>
     <div class="row" id="rowChg">
       <button class="rowHead" id="headChg">${svgIcon(ICONS.bolt, "ric")}
-        <span><span class="rTitle">Charging</span><div class="rSub" id="chgSub">—</div></span>
+        <span><span class="rTitle">Charging</span><div class="rSub" id="chgSub">-</div></span>
         ${svgIcon(ICONS.chevR, "chev")}</button>
       <div class="rowBody">
-        <div class="chgLine1">Charge limit: <b id="cLimVal">—</b><span id="chgState"></span></div>
+        <div class="chgLine1">Charge limit: <b id="cLimVal">-</b><span id="chgState"></span></div>
         <div class="chgLine2" id="chgLine2"></div>
         <div class="sliderWrap"><div class="limTick"></div>
           <input type="range" min="0" max="100" step="1" id="cLim" class="chgSlider"></div>
-        <div class="ampRow"><button id="ampDn">‹</button><span id="cAmp">—</span><button id="ampUp">›</button></div>
+        <div class="ampRow"><button id="ampDn">‹</button><span id="cAmp">-</span><button id="ampUp">›</button></div>
         <div class="chgBtns" id="chgBtns">
           <button id="btnStopChg">Stop Charging</button>
           <button id="btnUnlockPort">Unlock Charge Port</button>
@@ -953,14 +953,14 @@
     </div>
     <div class="row" id="rowLoc">
       <button class="rowHead" id="headLoc">${svgIcon(ICONS.pin, "ric")}
-        <span><span class="rTitle">Location</span><div class="rSub" id="locSub">—</div></span>
+        <span><span class="rTitle">Location</span><div class="rSub" id="locSub">-</div></span>
         ${svgIcon(ICONS.chevR, "chev")}</button>
     </div>
   </div>
 
   <div class="ftr">
-    <span id="odo">—</span>
-    <span id="upd">—</span>
+    <span id="odo">-</span>
+    <span id="upd">-</span>
   </div>
 </ha-card>`;
 
@@ -1047,7 +1047,7 @@
       if (cpwr) cpwr.addEventListener("click", (e) => { e.stopPropagation(); this._toggleClimate(); });
       const cvent = q("climVent");
       if (cvent) cvent.addEventListener("click", () => this._toggleCover("windows_cover"));
-      // no rear-centre seat heater in any Tesla — seatRC removed globally (Nick, 2026-08-31)
+      // no rear-centre seat heater in any Tesla - seatRC removed globally (Nick, 2026-08-31)
       const SEATS = [["seatFL","seat_fl"],["seatFR","seat_fr"],["seatRL","seat_rl"],["seatRR","seat_rr"]];
       const AP = this._climAnchors();
       const SEAT_POS = { seatFL: AP.fl, seatFR: AP.fr, seatRL: AP.rl, seatRC: AP.rc, seatRR: AP.rr, wheelHeat: AP.wheel };
@@ -1072,8 +1072,8 @@
         if (!s) return;
         // Build the tap cycle from the options the integration actually offers,
         // preserving each option's exact spelling for the service call.
-        // tesla_custom: Off/Auto/High/Medium/Low — tesla_fleet: off/low/medium/high
-        // — ventilated-seat cars: Off/Heat Low/Heat Medium/Heat High/Auto/Cool….
+        // tesla_custom: Off/Auto/High/Medium/Low - tesla_fleet: off/low/medium/high
+        // - ventilated-seat cars: Off/Heat Low/Heat Medium/Heat High/Auto/Cool….
         const avail = Array.isArray(s.attributes.options) && s.attributes.options.length
           ? s.attributes.options : ["Off", "Auto", "High", "Medium", "Low"];
         const find = (name) => avail.find((o) => {
@@ -1291,7 +1291,7 @@
     _toggleClimate() {
       const s = this._st("climate");
       if (!s) return;
-      // tesla_custom's climate entity doesn't support climate.turn_on/turn_off —
+      // tesla_custom's climate entity doesn't support climate.turn_on/turn_off -
       // set_hvac_mode works everywhere.
       const modes = s.attributes.hvac_modes || [];
       const turningOn = this._climOn() === false;
@@ -1301,7 +1301,7 @@
       } else {
         this._call("climate", "set_hvac_mode", { entity_id: s.entity_id, hvac_mode: "off" });
       }
-      // optimistic: Tesla's state echo is slow — show the intent immediately
+      // optimistic: Tesla's state echo is slow - show the intent immediately
       if (turningOn) { if (this._pend) delete this._pend.defrost; }
       else this._setPend("defrost", false);
       this._setPend("clim", turningOn);
@@ -1325,7 +1325,7 @@
 
     _resting() {
       if (this._view === "ctl" || this._view === "clim") return false;
-      // resting view only with a real photo — imageless cars open on the
+      // resting view only with a real photo - imageless cars open on the
       // top-down (drawn ¾ resting art removed for good, 2026-08-31)
       return !!this._img("image_side");
     }
@@ -1342,7 +1342,7 @@
                  : (plg && this._img("image_side_plugged")) ? "RestPlugged"
                  : (plg && this._img("image_charging")) ? "RestCharging" : "Rest";
       const baked = this._cableBaked();
-      // Baked pack photos already show the cable (green while charging) —
+      // Baked pack photos already show the cable (green while charging) -
       // no overlay at all. The drawn overlay exists only for users whose own
       // photos have no cable in them.
       if (baked) {
@@ -1449,16 +1449,16 @@
       </circle>
     </g>
     <g id="tpmsG" font-size="15" font-weight="600" fill="#ececec" ${this._config.show_tpms ? "" : 'style="display:none"'}>
-      <text id="tpFL" x="34" y="${tpmsFrontY}" text-anchor="middle">—</text>
-      <text id="tpFR" x="326" y="${tpmsFrontY}" text-anchor="middle">—</text>
-      <text id="tpRL" x="34" y="${tpmsRearY}" text-anchor="middle">—</text>
-      <text id="tpRR" x="326" y="${tpmsRearY}" text-anchor="middle">—</text>
+      <text id="tpFL" x="34" y="${tpmsFrontY}" text-anchor="middle">-</text>
+      <text id="tpFR" x="326" y="${tpmsFrontY}" text-anchor="middle">-</text>
+      <text id="tpRL" x="34" y="${tpmsRearY}" text-anchor="middle">-</text>
+      <text id="tpRR" x="326" y="${tpmsRearY}" text-anchor="middle">-</text>
     </g>
   </svg>
 </div>`;
     }
 
-    /* Drawn cabin used when no interior photo exists — feature positions sit at
+    /* Drawn cabin used when no interior photo exists - feature positions sit at
        the same fractional coordinates the heat-wave overlay expects. */
     _climCabinSvg() {
       return `
@@ -1608,11 +1608,11 @@
   </svg>
 </div>
 <div class="climPage">
-  <div class="climTemps" id="climTemps">—</div>
+  <div class="climTemps" id="climTemps">-</div>
   <div class="climCtl">
     <button class="pwr" id="climPwr">${svgIcon(ICONS.power)}<span id="climPwrLb">Off</span></button>
     <button class="arrow" id="tDn">‹</button>
-    <span class="big" id="tTgt">—</span>
+    <span class="big" id="tTgt">-</span>
     <button class="arrow" id="tUp">›</button>
     <button class="pwr" id="climVent">${svgIcon(ICONS.vent)}<span>Vent</span></button>
   </div>
@@ -1621,7 +1621,7 @@
 </div>`;
     }
 
-    /* Bioweapon / Camp / Pet / Cabin Overheat Protection — rendered only when
+    /* Bioweapon / Camp / Pet / Cabin Overheat Protection - rendered only when
        the integration exposes the matching capability. */
     _climExtraHtml() {
       const cs = this._st("climate");
@@ -1658,11 +1658,11 @@
       return this._carArt();
     }
 
-    /* Built-in fallback artwork — outlines traced 1:1 from reference photos of the
+    /* Built-in fallback artwork - outlines traced 1:1 from reference photos of the
        real cars (Model 3 art currently shares the Model Y trace); the surface
        rendering is original. Tap/overlay anchors match the previous geometry. */
     /* No image pack for this model+paint. There used to be a full drawn car
-       here as a fallback; it was removed deliberately — a hand-drawn car that
+       here as a fallback; it was removed deliberately - a hand-drawn car that
        is not quite your car reads as broken, and it quietly removed any reason
        to contribute a pack. Say what is missing, list what exists, recruit. */
     _carArt() {
@@ -1683,13 +1683,13 @@
   </svg>
   <div class="noPackTitle">No image pack yet</div>
   <div class="noPackBody">Nothing bundled for <b>${esc(car.model || "this model")}</b>
-    in <b>${esc(car.paint || "no paint set")}</b>. Everything else on this card works —
+    in <b>${esc(car.paint || "no paint set")}</b>. Everything else on this card works -
     only the picture is missing.</div>
   <div class="noPackHave">Packs that ship today:<ul>${have}</ul>
     Set <b>Model</b> and <b>Paint</b> to one of these to borrow its artwork.</div>
   <div class="noPackPath">${path}</div>
   <div class="noPackBody">A pack is seven photos from the Tesla app. If you own this car,
-    you are the right person to build one —
+    you are the right person to build one -
     <a href="https://github.com/MrNickIE/tesla-fleet-homeassistant" target="_blank" rel="noopener">contribute a pack</a>.</div>
 </div>`;
     }
@@ -1705,7 +1705,7 @@
 
       /* Detection is all-or-nothing: miss the battery entity and NOTHING
          resolves, so the card used to render blank with no explanation of why
-         (issue #1 — the reporter had no way to tell it was a prefix problem). */
+         (issue #1 - the reporter had no way to tell it was a prefix problem). */
       const dg = q("diag");
       if (dg) {
         const c0 = this._car;
@@ -1732,7 +1732,7 @@
       bf.style.width = Math.max(0, Math.min(100, pct || 0)) * 0.21 + "px";
       bf.className = "battFill" + (charging ? " chg" : pct !== null && pct <= 10 ? " crit" : pct !== null && pct <= 20 ? " low" : "");
       q("battTxt").textContent =
-        (pct === null ? "—" : Math.round(pct) + "%") +
+        (pct === null ? "-" : Math.round(pct) + "%") +
         (rng === null ? "" : " · " + Math.round(rng) + " " + this._unit("range", "km"));
 
       // status
@@ -1834,7 +1834,7 @@
         }
       }
 
-      // tpms — tesla_custom reports psi, tesla_fleet reports bar
+      // tpms - tesla_custom reports psi, tesla_fleet reports bar
       if (this._config.show_tpms) {
         const u = this._unit("tpms_fl", "psi").toLowerCase();
         const isBar = u === "bar";
@@ -1867,11 +1867,11 @@
         q("climPwrLb").textContent = climOn ? "On" : "Off";
       }
       const tT = q("tTgt");
-      if (tT) tT.textContent = climS && climS.attributes.temperature ? climS.attributes.temperature + "°" : "—";
+      if (tT) tT.textContent = climS && climS.attributes.temperature ? climS.attributes.temperature + "°" : "-";
       const ctTemps = q("climTemps");
       if (ctTemps) ctTemps.textContent =
         (inT === null ? "" : "Interior " + Math.round(inT) + "°C") +
-        (outT === null ? "" : (inT === null ? "" : "  ·  ") + "Exterior " + Math.round(outT) + "°C") || "—";
+        (outT === null ? "" : (inT === null ? "" : "  ·  ") + "Exterior " + Math.round(outT) + "°C") || "-";
       const cVent = q("climVent");
       if (cVent) cVent.classList.toggle("on", this._is("windows_cover", "open"));
       const LVL = { off: 0, low: 1, medium: 2, high: 3, auto: 3 };
@@ -1979,7 +1979,7 @@
       if (!this._limDrag && this.shadowRoot.activeElement !== q("cLim")) q("cLim").value = lim || 80;
       q("cLimVal").textContent = (lim ? Math.round(lim) : 80) + "%";
       const am = this._num("charging_amps");
-      q("cAmp").textContent = am === null ? "—" : Math.round(am) + " A";
+      q("cAmp").textContent = am === null ? "-" : Math.round(am) + " A";
       const cbl = q("cableP");
       if (cbl) {
         cbl.style.display = plugged ? "" : "none";
@@ -1993,7 +1993,7 @@
       const locS = this._st("location");
       q("locSub").textContent = locS
         ? (locS.state === "home" ? "Home" : locS.state === "not_home" ? "Away" : locS.state)
-        : "—";
+        : "-";
 
       // footer
       const odo = this._num("odometer");
@@ -2031,13 +2031,13 @@
           <button class="rm" data-rm="${i}" ${this._config.cars.length < 2 ? "disabled" : ""}>remove</button>
           <label>Name <input data-i="${i}" data-k="name" value="${c.name || ""}"></label>
           <label>Model <select data-i="${i}" data-k="model">
-            ${["", "Model 3", "Model Y"].map((m) => `<option value="${m}" ${((c.model || "") === m) ? "selected" : ""}>${m || "—"}</option>`).join("")}
+            ${["", "Model 3", "Model Y"].map((m) => `<option value="${m}" ${((c.model || "") === m) ? "selected" : ""}>${m || "-"}</option>`).join("")}
           </select></label>
           <label>Paint <select data-i="${i}" data-k="paint">
-            ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "—"}</option>`).join("")}
+            ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "-"}</option>`).join("")}
           </select></label>
           <label>Entity prefix <input data-i="${i}" data-k="prefix" value="${c.prefix || ""}" placeholder="e.g. buddy_"></label>
-          <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey) and tints the drawn fallback art. The integration is auto-detected from the prefix. Advanced options — custom images, tap anchors, integration override, entity overrides — live in YAML (Show code editor); see the README.</div>
+          <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey) and tints the drawn fallback art. The integration is auto-detected from the prefix. Advanced options - custom images, tap anchors, integration override, entity overrides - live in YAML (Show code editor); see the README.</div>
         </div>`;
       });
       html += `<button class="add" id="add">+ Add car</button></div>`;
@@ -2087,7 +2087,7 @@
   window.customCards.push({
     type: "tesla-fleet-card",
     name: "Tesla Fleet Card",
-    description: "Tesla-app-style card for tesla_custom & tesla_fleet — multi-car, one-click switching",
+    description: "Tesla-app-style card for tesla_custom & tesla_fleet - multi-car, one-click switching",
     preview: true,
   });
   console.info(
