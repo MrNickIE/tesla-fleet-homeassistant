@@ -13,6 +13,10 @@ Works with **both** Tesla integrations, automatically:
 > screenshots and screen recordings of the real Tesla app until the two were
 > hard to tell apart. Bugs are the AI's fault; the good ideas were Nick's. 🙂
 
+| Home | Charging | Controls | Climate |
+| --- | --- | --- | --- |
+| ![Home view](docs/screenshots/1-home.png) | ![Charging](docs/screenshots/2-home-charging.png) | ![Controls view](docs/screenshots/3-controls.png) | ![Climate view](docs/screenshots/4-climate.png) |
+
 ---
 
 ## Install
@@ -67,9 +71,11 @@ cars:
   (two-tap confirm), lock/unlock on the roof, tyre pressures at the corners
   (psi or bar, whatever your integration reports), and a breathing charge bolt
   while charging.
-- **Climate view** — the interior. Tap any seat to cycle its heater (levels
-  come from your integration), tap the steering wheel for its heater, set the
-  temperature, Vent, **Defrost Car**.
+- **Climate view** — the interior. Tap any seat to cycle its heater (uses
+  whichever heat levels your car offers — ventilated-seat cars included),
+  tap the steering wheel for its heater, set the temperature, Vent,
+  **Defrost Car** — plus Bioweapon Defence, Camp and Pet modes and Cabin
+  Overheat Protection where your car supports them.
 - **Charging panel** — charge-limit slider with a click-stop at 80 %, live
   `kW · +kWh · A/maxA · V` stats, "1h 5m remaining to charge limit" in the
   header, amps stepper, Stop Charging / Unlock Charge Port as applicable.
@@ -90,7 +96,13 @@ The card looks for images in this order — first hit wins:
    the layout `models/<3|y>/<paint>/app/`. Drop packs here once; the card
    finds them from each car's Model + Paint with zero config, and HACS
    updates never touch this folder.
-4. Nothing found → built-in drawn artwork.
+4. **The packs published in this repository** — fetched automatically over
+   GitHub raw for your car's Model + Paint. Zero config, and pack updates
+   arrive on their own without a card update.
+5. Nothing found → built-in drawn artwork.
+
+Pack photos are treated as complete: the card draws no cable overlay on
+them — a charging photo's own cable shows the state.
 
 A pack is seven JPEGs with these names and sizes:
 
@@ -133,6 +145,7 @@ Per car:
 | `cable: baked` | Photos already contain the cable (automatic when a pack is in use). |
 | `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
 | `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
+| `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
 bar), `accent`.
