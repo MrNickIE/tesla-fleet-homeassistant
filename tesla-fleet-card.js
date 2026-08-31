@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.0.1";
+  const CARD_VERSION = "1.0.2-dev";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -109,7 +109,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", color: "#f2f3f5", hood_tint: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, calibrate: false, hide_seats: [], paint: "", prefix: "", entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", color: "#f2f3f5", hood_tint: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], paint: "", prefix: "", entities: {} };
 
   const PAINT_COLORS = { red: "#a4232e", grey: "#5c5e62", gray: "#5c5e62", white: "#f2f3f5",
     black: "#171a20", blue: "#1f3a93", silver: "#c8c9cb" };
@@ -167,6 +167,156 @@
       <circle cx="${x}" cy="${y}" r="26" fill="#000" opacity="0"/>
       ${wave(-9, 0)}${wave(0, 1)}${wave(9, 2)}
     </g>`;
+  }
+
+  /* -- Defrost glow ----------------------------------------------------------
+     Measured off Nick's own app screen recording (ffmpeg, 15fps sampling of a
+     4s window), rather than guessed:
+       * the REAR screen is a flat vertical gradient — deep at the roofline,
+         brightest at the outer edge (redness ramps ~4.4x top to bottom) — and
+         is COMPLETELY STATIC: 0.06 variation over 7 seconds.
+       * the WINDSCREEN band breathes on a 4.0s cycle at about +/-12%. Only
+         that band moves; a control patch of cabin measured 0.09 over the same
+         window, so it is the glow, not the view shifting.
+       * the vent mist cones are NOT drawn while defrost runs.
+       * climate off means defrost off — the app drops both together.
+     The climate-view geometry is NOT hand-traced. The recording contains the
+     same view with defrost on and off, and the car render is identical between
+     them (body patches differ by ~1/255), so differencing the two frames yields
+     the glow itself. Connected components separate the two glows (69k and 74k
+     px) from the UI text that also changed (~250px each, rejected). That mask
+     was warped into pack-image space by matching car bounding boxes, giving the
+     outlines and per-row alpha below. Two things it settled: the glows are
+     broad soft washes over each END OF THE CABIN, not tight glass polygons, and
+     the wing mirrors do NOT tint. Colours are NOT from the recording — that
+     phone had a warm colour filter on (its Control Centre is orange too). */
+  const DF_ANIM = '<animate attributeName="opacity" dur="4s" repeatCount="indefinite" ' +
+    'keyTimes="0;0.155;0.43;0.58;0.72;0.885;1" values=".95;.79;1;.84;.91;.82;.95" ' +
+    'calcMode="spline" keySplines=".4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1;.4 0 .6 1"/>';
+
+  /* Relative alpha measured down each band of the climate view. Both reach zero
+     at the inner edge, which is why the app never shows a boundary. */
+  const DF_STOPS = {
+    ws: [[0, .14], [.08, .98], [.16, .99], [.24, .85], [.32, .75], [.40, .65], [.48, .54],
+         [.56, .40], [.64, .35], [.72, .30], [.80, .25], [.88, .17], [.96, .10], [1, 0]],
+    rear: [[0, .04], [.09, .10], [.18, .18], [.26, .24], [.34, .35], [.42, .42], [.50, .51],
+           [.59, .59], [.67, .68], [.75, .78], [.83, .88], [.91, .97], [1, 1]],
+  };
+  /* The same two profiles serve every view. A symmetric "fills the pane" curve
+     was tried on the top-down and 3/4 renders and was wrong: side by side with
+     Nick's screenshot the app's rear-screen tint sits LOW in the pane, hugging
+     the shut line and fading upward — exactly the measured rear profile. */
+
+  /* Peaks and colour. clim_* are the video-measured view and are left alone.
+     The pane_* set is used on the views with no reference; its colour is more
+     saturated because a composite match against the reference screenshot showed
+     the old one going muddy: brightest pixels measured RGB 155/67/52 against the
+     app's 108/39/31 — brighter in red but far greyer, which reads as dark. */
+  /* Radial falloff for the 3/4 rear renders. Reaching zero at the shape's edge
+     means the tint physically cannot appear outside its outline. */
+  const DF_BLOB = [[0, 1], [.45, .97], [.62, .90], [.75, .72], [.86, .47], [.94, .22], [1, 0]];
+  const DF_PEAK = { ws: 0.36, rear: 0.66, pane_ws: 0.42, pane_rear: 0.78, blob: 0.68 };
+  const DF_COLOR = { ws: "#c0341f", rear: "#cb3a22", pane: "#c33019" };
+
+  function dfScale(stops, peak, lo, hi) {
+    return stops.map((st) => [lo + st[0] * (hi - lo), st[1] * peak]);
+  }
+  function dfGradStops(r) {
+    const W = DF_STOPS.ws, R = DF_STOPS.rear, P = DF_PEAK;
+    if (r.g === "blob") return { radial: 1, stops: dfScale(DF_BLOB, P.blob, 0, 1), colour: DF_COLOR.pane };
+    if (r.g === "ws" || r.g === "rear") {
+      const base = r.g === "ws" ? W : R;
+      const peak = r.pane ? P["pane_" + r.g] : P[r.g];
+      return { stops: dfScale(base, peak, 0, 1), colour: r.pane ? DF_COLOR.pane : DF_COLOR[r.g] };
+    }
+    /* drawn fallback art: one glass path, warm both ends, clear across the roof */
+    return { colour: DF_COLOR.rear,
+      stops: dfScale(W, P.ws, 0, .42).concat([[.46, .012], [.54, .012]]).concat(dfScale(R, P.rear, .58, 1)) };
+  }
+
+  /* Outlines. clim_* came out of the video by differencing a defrost-on frame
+     against a defrost-off one. top_* were measured off the pack photo: per-row
+     glass-edge detection on the left flank, median-smoothed and mirrored about
+     the car centreline (the right flank is shadowed and defeats the detector),
+     inset 2 units. pane_* were traced and checked by drawing them back over the
+     photos. All of them are verifiable by re-rendering, not by taste. */
+  const DF_PATHS = {
+    clim_ws: "M 133.5 12.5 L 104 20.5 L 90 28.5 L 88.5 36.5 L 88.5 44.5 L 89 52.5 L 89.5 60.5 L 90.5 68.5 L 91 76.5 L 92 84.5 L 92.5 92.5 L 94 100.5 L 100.5 108.5 L 103 110.5 L 267 110.5 L 274.5 108.5 L 276.5 100.5 L 277.5 92.5 L 278 84.5 L 279 76.5 L 280 68.5 L 280 60.5 L 281 52.5 L 281.5 44.5 L 281.5 36.5 L 280 28.5 L 266 20.5 L 236 12.5 Z",
+    clim_rear: "M 110.5 323.5 L 107.5 331.5 L 107.5 339.5 L 108 347.5 L 108.5 355.5 L 109.5 363.5 L 110 371.5 L 111 379.5 L 112 387.5 L 112.5 395.5 L 113.5 403.5 L 114.5 411.5 L 115.5 419.5 L 117 427.5 L 119.5 435.5 L 125 443.5 L 141.5 451.5 L 172.5 456 L 198 456 L 228.5 451.5 L 245.5 443.5 L 250.5 435.5 L 253 427.5 L 254.5 419.5 L 255.5 411.5 L 256.5 403.5 L 257.5 395.5 L 258 387.5 L 259 379.5 L 260 371.5 L 260.5 363.5 L 261.5 355.5 L 262.5 347.5 L 262.5 339.5 L 263 331.5 L 255.5 323.5 Z",
+    /* the top-down has three glass panels; shut lines measured at vb 183, 332 and 603,
+       so the windscreen ends at 331 and the rear screen does not start until 604 */
+    top_ws: "M 99 176 L 88 240 L 91 305 L 93 330 L 267 330 L 269 305 L 272 240 L 261 176 Z",
+    top_rear: "M 108 606 L 110 642 L 123 706 L 146 728 L 214 728 L 237 706 L 250 642 L 252 606 Z",
+    /* bottom edge follows the decklid shut line, which rises toward the tail;
+       alpha peaks there, so an overhang onto bodywork shows immediately */
+    /* NOT a pane outline: this is the app's own glow region, segmented out of
+       Nick's Model 3 screenshot and mapped here by matching car bounding boxes.
+       The app keeps clear margin inside the rear window on every side, so the
+       tint never touches the roofline, C-pillar or decklid. */
+    pane_plugged: "M 159.6 22.6 L 157.8 23.6 L 149.7 24.5 L 144.4 25.5 L 141.9 26.5 L 138.7 27.5 L 138.7 28.5 L 139.8 29.5 L 140.9 30.4 L 141.9 31.4 L 142.6 32.4 L 144.4 33.4 L 145.4 34.4 L 148.3 35.3 L 150.7 36.3 L 151.8 37.3 L 161.7 37.3 L 165.2 36.3 L 174 35.3 L 179 34.4 L 181.1 33.4 L 182.9 32.4 L 183.6 31.4 L 183.6 30.4 L 182.9 29.5 L 180.4 28.5 L 179 27.5 L 179 26.5 L 178.6 25.5 L 175.8 24.5 L 173.3 23.6 L 171.9 22.6 Z",
+    pane_charging: "M 159.6 23.6 L 158.2 24.5 L 149.7 25.3 L 144 26.2 L 141.9 27.1 L 138.7 27.9 L 138.7 28.8 L 140.2 29.7 L 140.9 30.5 L 141.9 31.4 L 143 32.3 L 144.7 33.1 L 146.5 34 L 148.6 34.8 L 151.1 35.7 L 152.9 36.6 L 155.3 36.6 L 165.2 35.7 L 174 34.8 L 176.9 34 L 181.1 33.1 L 182.9 32.3 L 183.9 31.4 L 183.9 30.5 L 183.2 29.7 L 180.8 28.8 L 179.3 27.9 L 179.3 27.1 L 179.3 26.2 L 176.2 25.3 L 173.7 24.5 L 172.3 23.6 Z"
+  };
+
+  /* anim marks the piece that breathes: only the climate view's front wash,
+     the one region the recording showed moving (its top, middle and lower
+     thirds all varied ~22-24%, i.e. the group as a whole). fade adds the
+     horizontal mask that stops a shape's sides from showing. */
+  const DF_REGIONS = {
+    Clim: [{ k: "ws", g: "ws", d: "clim_ws", anim: 1 }, { k: "re", g: "rear", d: "clim_rear" }],
+    Top: [{ k: "ws", g: "ws", pane: 1, d: "top_ws", fade: 1 },
+          { k: "re", g: "rear", pane: 1, d: "top_rear", fade: 1 }],
+    /* side.jpg is shot from the front: no rear screen in frame, and the app
+       showed no tint on the home view at all (it measured flat). So: none. */
+    Rest: [],
+    RestPlugged: [{ k: "re", g: "blob", d: "pane_plugged" }],
+    RestCharging: [{ k: "re", g: "blob", d: "pane_charging" }],
+    Art: []
+  };
+
+  function dfStopTags(stops, colour) {
+    return stops.map((st) => `<stop offset="${+st[0].toFixed(3)}" stop-color="${colour}" ` +
+      `stop-opacity="${+st[1].toFixed(3)}"/>`).join("");
+  }
+  function dfDefs(sfx, car, override) {
+    return dfRegions(sfx, car, override).map((r) => {
+      const G = dfGradStops(r);
+      let out = G.radial
+        ? `<radialGradient id="dfG_${r.k}${sfx}" cx=".5" cy=".5" r=".5">` +
+          `${dfStopTags(G.stops, G.colour)}</radialGradient>`
+        : `<linearGradient id="dfG_${r.k}${sfx}" x1="0" y1="0" x2="0" y2="1">` +
+          `${dfStopTags(G.stops, G.colour)}</linearGradient>`;
+      if (r.fade) out +=
+        `<linearGradient id="dfF_${r.k}${sfx}" x1="0" y1="0" x2="1" y2="0">` +
+        `<stop offset="0" stop-color="#000"/><stop offset=".22" stop-color="#fff"/>` +
+        `<stop offset=".78" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient>` +
+        `<mask id="dfM_${r.k}${sfx}" maskContentUnits="objectBoundingBox">` +
+        `<rect x="0" y="0" width="1" height="1" fill="url(#dfF_${r.k}${sfx})"/></mask>`;
+      return out;
+    }).join("");
+  }
+  function dfRegions(sfx, car, override) {
+    if (override) return override;
+    const base = DF_REGIONS[sfx] || [];
+    const o = (car && car.defrost_glass) || {};
+    const own = o[sfx.toLowerCase()];
+    if (!own) return base;
+    /* per-car override: swaps the outlines for this view, keeping the recipes */
+    return String(own).split("|").map((d) => d.trim()).filter(Boolean).map((d, i) => {
+      const b = base[i] || base[0] || { k: "re", g: "rear", pane: 1, fade: 1 };
+      return { k: b.k || ("o" + i), g: b.g, pane: b.pane, anim: b.anim, fade: b.fade, raw: d };
+    });
+  }
+  function dfGlow(sfx, car, override) {
+    const regions = dfRegions(sfx, car, override);
+    if (!regions.length) return "";
+    const body = regions.map((r) => {
+      const d = r.raw || DF_PATHS[r.d];
+      if (!d) return "";
+      const shape = `<path d="${d}" fill="url(#dfG_${r.k}${sfx})"/>`;
+      const mask = r.fade ? ` mask="url(#dfM_${r.k}${sfx})"` : "";
+      return `<g${mask}>${shape}${r.anim ? DF_ANIM : ""}</g>`;
+    }).join("");
+    return `<g id="df${sfx}" style="display:none" pointer-events="none">${body}</g>`;
   }
 
   function relDur(iso) {
@@ -299,6 +449,20 @@
       return String(s.state).toLowerCase() === "charging";   // tesla_fleet sensor
     }
     _plugged() { return this._is("charger", "on"); }
+    /* Defrost is a real switch on tesla_fleet; on tesla_custom it is a climate
+       preset. Single source of truth for the button, the glass glow and the
+       header badge. */
+    _defrostOn() {
+      const ds = this._st("defrost_switch");
+      if (ds) return ds.state === "on";
+      const cs = this._st("climate");
+      /* tesla_custom leaves preset_mode on "defrost" after the HVAC is switched
+         off, which left the glass lit with the climate off. The app drops both
+         together, so treat an off/unknown climate as defrost off. */
+      if (!cs || cs.state === "off" || cs.state === "unavailable" || cs.state === "unknown") return false;
+      return cs.attributes.preset_mode === "defrost";
+    }
+
     _steeringOn() {
       const s = this._st("steering_heat");
       if (!s) return false;
@@ -462,6 +626,8 @@
   .battLine { display:flex; align-items:center; gap:7px; margin-top:5px; color:#9b9b9b; font-size:13px; }
   .battLine #battBolt { display:flex; }
   .battLine #battBolt svg { width:13px; height:13px; fill:#4fd07a; }
+  .battLine #battDefrost { display:flex; }
+  .battLine #battDefrost svg { width:12px; height:13px; }
   .chgBtns { display:none; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
   .chgBtns.show { display:grid; }
   .chgBtns button { background:#1f1f1f; border:none; color:#dcdcdc; font-family:inherit;
@@ -582,7 +748,7 @@
     <div style="position:relative">
       <button class="nmBtn" id="nmBtn"><span class="nm">${car.name}</span>${svgIcon(ICONS.chev)}</button>
       <div class="battLine"><span class="battGlyph"><span class="battFill" id="battFill"></span></span>
-        <span id="battTxt">—</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span></div>
+        <span id="battTxt">—</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
       <div class="sub" id="sub">—</div>
       <div class="carMenu" id="carMenu" hidden></div>
     </div>
@@ -988,6 +1154,11 @@
       const src = (chg && this._img("image_charging")) ||
                   (plg && (this._img("image_side_plugged") || this._img("image_charging"))) ||
                   this._img("image_side");
+      /* the three pack variants are different camera angles, so the glass trace
+         has to follow whichever photo we just chose */
+      const rSfx = (chg && this._img("image_charging")) ? "RestCharging"
+                 : (plg && this._img("image_side_plugged")) ? "RestPlugged"
+                 : (plg && this._img("image_charging")) ? "RestCharging" : "Rest";
       const baked = this._cableBaked();
       // Baked pack photos already show the cable (green while charging) —
       // no overlay at all. The drawn overlay exists only for users whose own
@@ -996,6 +1167,10 @@
         return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
+    <defs>${dfDefs(rSfx, this._car)}</defs>
+    ${dfGlow(rSfx, this._car)}
+  </svg>
   <button class="ctlBtn" id="ctlOpen">Controls</button>
 </div>`;
       }
@@ -1006,6 +1181,10 @@
       return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
+    <defs>${dfDefs(rSfx, this._car)}</defs>
+    ${dfGlow(rSfx, this._car)}
+  </svg>
   <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="display:none">
     <path id="restCable" d="${cable}" stroke="#3f6db5" stroke-width="2.6" fill="none" stroke-linecap="round"/>
     <path id="restCableDash" d="${cable}" pathLength="100" stroke="#3aa869" stroke-opacity=".85" stroke-width="1.6" fill="none"
@@ -1062,6 +1241,8 @@
   <img id="topImg" class="carImg" src="${tsrc}" alt="">
   ${this._car.calibrate ? '<div class="calib" id="calibOut">calibrate: tap the image to read x,y</div>' : ""}
   <svg class="car ovl" viewBox="0 0 360 773" preserveAspectRatio="none">
+    <defs>${dfDefs("Top", this._car)}</defs>
+    ${dfGlow("Top", this._car)}
     <g paint-order="stroke" stroke="#000000aa" stroke-width="3">
       <g id="frunkTap" class="tapa">
         <rect x="${fkx - 70}" y="${fky - 78}" width="140" height="130" rx="16" fill="#000" opacity="0" stroke="none"/>
@@ -1202,7 +1383,9 @@
       </linearGradient>
       <clipPath id="coneClip-vL"><path d="M -11 0 L -46 188 Q 0 214 46 188 L 11 0 Z"/></clipPath>
       <clipPath id="coneClip-vR"><path d="M -11 0 L -46 188 Q 0 214 46 188 L 11 0 Z"/></clipPath>
+      ${dfDefs("Clim", car)}
     </defs>
+    ${dfGlow("Clim", car)}
     <g id="climHaze" style="display:none">
       ${vent(A.fl[0], -3, "vL")}
       ${vent(A.fr[0], 3, "vR")}
@@ -1298,6 +1481,8 @@
        rendering is original. Tap/overlay anchors match the previous geometry. */
     _carArt() {
       const A = TeslaFleetCard._ART[/3/.test(String(this._car.model || "")) ? "3" : "y"];
+      /* the drawn art's glass is one runtime path, so its region is built here */
+      const dfArt = [{ k: "art", g: "art", raw: A.glass }];
       const c = this._car.color || "#f2f3f5";
       const light = lum(c) > 0.55;
       const hi = shade(c, light ? 1.03 : 1.3);
@@ -1336,6 +1521,7 @@
     <filter id="softB" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
     <clipPath id="bodyC"><path d="${A.body}"/></clipPath>
     <clipPath id="glassC"><path d="${A.glass}"/></clipPath>
+    ${dfDefs("Art", this._car, dfArt)}
   </defs>
 
   <ellipse cx="180" cy="334" rx="126" ry="288" fill="#000" opacity=".5" filter="url(#softB)"/>
@@ -1381,6 +1567,7 @@
     <path d="${A.glass}" fill="none" stroke="#3c434c" stroke-width="2.5" opacity=".35"/>
   </g>
   <path d="${A.glass}" fill="none" stroke="#07080a" stroke-width="1.6" opacity=".9"/>
+  ${dfGlow("Art", this._car, dfArt)}
 
   <g>
     <path d="M74 246 L 52 238 C 44 235 40 240 43 247 C 46 256 55 262 65 261 L 78 258 Z" fill="${mid}" stroke="${edge}" stroke-width="1"/>
@@ -1622,13 +1809,18 @@
         const wIc = q("wheelHeatIcon");
         if (wIc) wIc.querySelector("path").setAttribute("fill", whOn ? "#e64545" : "#a9adb2");
       }
+      const dfOn = this._defrostOn();
       const dfB = q("btnDefrost");
-      if (dfB) {
-        const dsS = this._st("defrost_switch");
-        dfB.classList.toggle("on", dsS ? dsS.state === "on" : !!climS && climS.attributes.preset_mode === "defrost");
-      }
+      if (dfB) dfB.classList.toggle("on", dfOn);
+      const dfBadge = q("battDefrost");
+      if (dfBadge) dfBadge.style.display = dfOn ? "" : "none";
+      ["dfClim", "dfTop", "dfRest", "dfRestPlugged", "dfRestCharging", "dfArt"].forEach((gid) => {
+        const gg = q(gid);
+        if (gg) gg.style.display = dfOn ? "" : "none";
+      });
       const haze = q("climHaze");
-      if (haze) haze.style.display = climOn ? "" : "none";
+      /* the app does not draw vent mist while defrost is running */
+      if (haze) haze.style.display = climOn && !dfOn ? "" : "none";
       const ccg = q("climCableG");
       if (ccg) {
         ccg.style.display = plugged ? "" : "none";
