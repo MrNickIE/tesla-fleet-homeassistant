@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.0.0";
+  const CARD_VERSION = "1.0.1";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -989,27 +989,32 @@
                   (plg && (this._img("image_side_plugged") || this._img("image_charging"))) ||
                   this._img("image_side");
       const baked = this._cableBaked();
+      // Baked pack photos already show the cable (green while charging) —
+      // no overlay at all. The drawn overlay exists only for users whose own
+      // photos have no cable in them.
+      if (baked) {
+        return `
+<div class="imgWrap rest" id="restWrap" title="Open controls">
+  <img id="restImg" class="carImg" src="${src}" alt="">
+  <button class="ctlBtn" id="ctlOpen">Controls</button>
+</div>`;
+      }
       const pxy = this._car.port_xy || "159,47";
       const [px, py] = pxy.split(",").map(Number);
       const cable = this._car.cable_path ||
-        (baked ? "M 62 96 C 77 93.5 92 90.5 104.5 88.4 C 111 86.5 114 82 116.5 75 C 119.5 66 120.5 60 124 52.5 C 126 49.5 130 47.5 136 46.4"
-               : `M ${px - 43} 108 C ${px - 19} 103 ${px - 7} 76 ${px} ${py + 1}`);
-      const base = baked ? "" :
-        `<path id="restCable" d="${cable}" stroke="#3f6db5" stroke-width="2.6" fill="none" stroke-linecap="round"/>`;
-      const glow = baked ? "" :
-        `<circle id="restGlow" cx="${px}" cy="${py}" r="2.6" fill="#4fd07a" style="display:none">
-      <animate attributeName="opacity" values="1;.45;1" dur="1.5s" repeatCount="indefinite"/>
-    </circle>`;
+        `M ${px - 43} 108 C ${px - 19} 103 ${px - 7} 76 ${px} ${py + 1}`;
       return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="display:none">
-    ${base}
-    <path id="restCableDash" d="${cable}" pathLength="100" stroke="#3aa869" stroke-opacity=".85" stroke-width="${baked ? 1.3 : 1.6}" fill="none"
+    <path id="restCable" d="${cable}" stroke="#3f6db5" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <path id="restCableDash" d="${cable}" pathLength="100" stroke="#3aa869" stroke-opacity=".85" stroke-width="1.6" fill="none"
           stroke-linecap="round" stroke-dasharray="28 72" style="display:none">
       <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.5s" repeatCount="indefinite"/>
     </path>
-    ${glow}
+    <circle id="restGlow" cx="${px}" cy="${py}" r="2.6" fill="#4fd07a" style="display:none">
+      <animate attributeName="opacity" values="1;.45;1" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
   </svg>
   <button class="ctlBtn" id="ctlOpen">Controls</button>
 </div>`;
@@ -1505,7 +1510,7 @@
       const bakedC = this._cableBaked();
       const rOvl = q("restChgOvl");
       if (rOvl) {
-        rOvl.style.display = (bakedC ? charging : (charging || plugged) && this._img("image_charging")) ? "" : "none";
+        rOvl.style.display = (!bakedC && (charging || plugged) && this._img("image_charging")) ? "" : "none";
         const rc = q("restCable");
         if (rc) rc.setAttribute("stroke", charging ? "#2f7a49" : "#3f6db5");
         const rd = q("restCableDash");
