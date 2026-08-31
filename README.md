@@ -132,12 +132,10 @@ Per car:
 
 | Option | What it does |
 | --- | --- |
-| `name`, `model`, `paint` | As in the editor. `paint` picks the pack folder and artwork colour. |
+| `name`, `model`, `paint` | As in the editor. `paint` picks the image-pack folder, and colours the car's dot in the switcher. |
 | `prefix` | Entity prefix. |
 | `integration` | `auto` (default) / `tesla_custom` / `tesla_fleet`. |
 | `entities:` | Per-entity overrides, e.g. `energy_added: sensor.modely_energy_added`. |
-| `color` | Artwork colour override (hex) if `paint` isn't enough. |
-| `hood_tint` | Bonnet wrap tint for the artwork. |
 | `images` | Pack base folder or URL for this car. |
 | `image`, `image_top_plugged`, `image_top_charging` | Top-down photos. |
 | `image_side`, `image_side_plugged`, `image_charging` | Resting-view photos. |
@@ -167,3 +165,16 @@ Designed by mimicking the official Tesla app. Built end-to-end by
 [Claude](https://claude.ai) in conversation with MrNickIE, who supplied
 the screenshots, the screen recordings, the opinions, and the phrase
 "you have drawn a SPACESHIP". Shared under the MIT licence — enjoy.
+
+## Contributing an image pack
+
+A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`:
+
+`topdown.jpg` · `topdown-plugged.jpg` · `topdown-charging.jpg` · `side.jpg` · `side-plugged.jpg` · `side-charging.jpg` · `climate.jpg`
+
+Partial packs are fine — the card probes each slot and uses what it finds.
+
+**If you add a pack, add it to `PACKS_SHIPPED` in `tesla-fleet-card.js` too.** That
+list is what the card shows a user whose model and paint have no artwork yet, so
+it going stale is worse than useless: it either hides a pack that exists, or sends
+someone to one that doesn't.

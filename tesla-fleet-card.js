@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.0.2-dev";
+  const CARD_VERSION = "1.1.0";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -109,10 +109,28 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", color: "#f2f3f5", hood_tint: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], paint: "", prefix: "", entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], paint: "", prefix: "", entities: {} };
+
+  /* how long an assumed state is trusted before the real one wins back */
+  const PEND_MS = 25000;
 
   const PAINT_COLORS = { red: "#a4232e", grey: "#5c5e62", gray: "#5c5e62", white: "#f2f3f5",
     black: "#171a20", blue: "#1f3a93", silver: "#c8c9cb" };
+
+  /* Packs that ship with the repo. Keep in step with images/models/. The card
+     lists these when a car has no pack of its own, so nobody is left guessing
+     what exists — and so an unsupported combination is a nudge to build one
+     rather than a dead end. */
+  const PACKS_SHIPPED = [
+    { model: "Model Y", paint: "red", dir: "models/y/red/app" },
+    { model: "Model 3", paint: "grey", dir: "models/3/grey/app" }
+  ];
+  const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
+
+  function esc(v) {
+    return String(v == null ? "" : v).replace(/[&<>"]/g, (m) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+  }
 
   function normIntegration(v) {
     const s = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
@@ -229,9 +247,9 @@
       const peak = r.pane ? P["pane_" + r.g] : P[r.g];
       return { stops: dfScale(base, peak, 0, 1), colour: r.pane ? DF_COLOR.pane : DF_COLOR[r.g] };
     }
-    /* drawn fallback art: one glass path, warm both ends, clear across the roof */
-    return { colour: DF_COLOR.rear,
-      stops: dfScale(W, P.ws, 0, .42).concat([[.46, .012], [.54, .012]]).concat(dfScale(R, P.rear, .58, 1)) };
+    /* only reached if a caller invents a recipe name; the drawn-art one went
+       when the drawn art did */
+    return { stops: dfScale(R, P.rear, 0, 1), colour: DF_COLOR.rear };
   }
 
   /* Outlines. clim_* came out of the video by differencing a defrost-on frame
@@ -273,6 +291,42 @@
     Art: []
   };
 
+  /* --- Fitting the outlines to whatever pack is actually on screen ---------
+     Every outline below was traced against the bundled pack's photos. A
+     different pack frames the car differently — Patsy's Model Y climate render
+     is 14% wider and 11% taller than the bundled Model 3 one and sits shifted —
+     so the same coordinates land small and high on it, which is exactly how
+     this was found. DF_CALIB records the car's bounding box in the image each
+     view was traced against; at render time the card measures the car box in
+     the image actually being shown and maps the outline across. Detection is a
+     one-off canvas read per image URL, cached, and falls back to these numbers
+     if it can't run (tainted canvas, load failure). */
+  /* each view's overlay viewBox, needed to express a measured box in view units */
+  const DF_VB = { Clim: [360, 600], Top: [360, 773], Rest: [233, 108],
+                  RestPlugged: [233, 108], RestCharging: [233, 108] };
+  const DF_CALIB = {
+    Clim: [26.5, 10.5, 334, 514],          // images/models/3/grey/app/climate.jpg
+    Top: [24, 14.5, 336, 754],             // …/topdown.jpg
+    Rest: [33.9, 7.5, 205.5, 105.1],       // …/side.jpg
+    RestPlugged: [33.9, 7.5, 205.5, 105.1],
+    RestCharging: [33.9, 10.7, 205.8, 96.2]
+  };
+  /* remap every coordinate pair in an "M x y L x y … Z" path from the box it
+     was traced in to the box measured on screen */
+  function dfFit(d, from, to) {
+    if (!from || !to) return d;
+    const sx = (to[2] - to[0]) / (from[2] - from[0]);
+    const sy = (to[3] - to[1]) / (from[3] - from[1]);
+    if (!isFinite(sx) || !isFinite(sy) || sx <= 0 || sy <= 0) return d;
+    let n = 0;
+    return d.replace(/-?\d*\.?\d+/g, (v) => {
+      const f = parseFloat(v);
+      const out = (n++ % 2 === 0) ? to[0] + (f - from[0]) * sx
+                                  : to[1] + (f - from[1]) * sy;
+      return String(Math.round(out * 10) / 10);
+    });
+  }
+
   function dfStopTags(stops, colour) {
     return stops.map((st) => `<stop offset="${+st[0].toFixed(3)}" stop-color="${colour}" ` +
       `stop-opacity="${+st[1].toFixed(3)}"/>`).join("");
@@ -306,12 +360,13 @@
       return { k: b.k || ("o" + i), g: b.g, pane: b.pane, anim: b.anim, fade: b.fade, raw: d };
     });
   }
-  function dfGlow(sfx, car, override) {
+  function dfGlow(sfx, car, override, box) {
     const regions = dfRegions(sfx, car, override);
     if (!regions.length) return "";
     const body = regions.map((r) => {
-      const d = r.raw || DF_PATHS[r.d];
+      let d = r.raw || DF_PATHS[r.d];
       if (!d) return "";
+      d = dfFit(d, DF_CALIB[sfx], box);
       const shape = `<path d="${d}" fill="url(#dfG_${r.k}${sfx})"/>`;
       const mask = r.fade ? ` mask="url(#dfM_${r.k}${sfx})"` : "";
       return `<g${mask}>${shape}${r.anim ? DF_ANIM : ""}</g>`;
@@ -331,23 +386,6 @@
     return Math.floor(h / 24) + " days";
   }
 
-  function hexRgb(hex) {
-    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
-    if (!m) return null;
-    const n = parseInt(m[1], 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-  function shade(hex, f) {
-    const rgb = hexRgb(hex);
-    if (!rgb) return hex;
-    const ch = (x) => Math.max(0, Math.min(255, Math.round(x * f)));
-    return "#" + ((ch(rgb[0]) << 16) | (ch(rgb[1]) << 8) | ch(rgb[2])).toString(16).padStart(6, "0");
-  }
-  function lum(hex) {
-    const rgb = hexRgb(hex);
-    return rgb ? (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255 : 0.5;
-  }
-
   ICONS.plug = "M16 7V3h-2v4h-4V3H8v4c-1.1 0-2 .9-2 2v5.5L9.5 18v3h5v-3l3.5-3.5V9c0-1.1-.9-2-2-2z";
 
   class TeslaFleetCard extends HTMLElement {
@@ -355,7 +393,8 @@
       return document.createElement("tesla-fleet-card-editor");
     }
     static getStubConfig() {
-      return { cars: [{ name: "My Tesla", model: "Model Y", color: "#f2f3f5", prefix: "" }] };
+      return { cars: [{ name: "My Tesla", model: PACK_DEFAULT.model,
+                        paint: PACK_DEFAULT.paint, prefix: "" }] };
     }
 
     setConfig(config) {
@@ -369,16 +408,22 @@
       this._config = Object.assign({}, CARD_DEFAULTS, config);
       this._cars = this._config.cars.map((c) => {
         const car = Object.assign({}, CAR_DEFAULTS, c);
+        /* `color` was removed as a config option: it only ever tinted the drawn
+           fallback art, which `paint` already does. Drop any left over from an
+           older config so no dead key survives on the car object. */
+        delete car.color;
         car._cableSet = c.cable !== undefined;
-        if (!c.color && car.paint && PAINT_COLORS[String(car.paint).toLowerCase()])
-          car.color = PAINT_COLORS[String(car.paint).toLowerCase()];
         const forced = normIntegration(car.integration);
         car._integration = forced || "";           // "" = auto-detect at first hass
         car._entities = resolveEntities(car, forced || "tesla_custom");
         car._detected = !!forced;
         return car;
       });
-      this._sel = Math.min(this._config.default_car || 0, this._cars.length - 1);
+      /* Keep the chosen car across setConfig. The editor emits config-changed on
+         every keystroke, so HA re-ran setConfig and the preview snapped back to
+         the first car each time (issue #1). */
+      const keep = typeof this._sel === "number" && this._sel < this._cars.length;
+      this._sel = keep ? this._sel : Math.min(this._config.default_car || 0, this._cars.length - 1);
       this._built = false;
       this._arm = {};
       this._armT = {};
@@ -393,6 +438,8 @@
     }
     disconnectedCallback() {
       clearInterval(this._timer);
+      clearTimeout(this._refT1);
+      clearTimeout(this._refT2);
     }
 
     get _car() { return this._cars[this._sel]; }
@@ -452,13 +499,104 @@
     /* Defrost is a real switch on tesla_fleet; on tesla_custom it is a climate
        preset. Single source of truth for the button, the glass glow and the
        header badge. */
+    /* --- Optimistic state -------------------------------------------------
+       Tesla polls, so a command can take a minute to show up in HA. Without
+       this the card looks broken: you press Defrost, the car starts heating,
+       and nothing on screen moves. So: assume the command worked, show that
+       immediately, and let the real state take over the moment it agrees (or
+       time out and fall back to the truth if it never does). */
+    _setPend(key, val) {
+      this._pend = this._pend || {};
+      this._pend[key] = { val: val, ts: Date.now() };
+      this._nudgeRefresh();
+      if (this._hass) this._update();
+    }
+    _pendVal(key) {
+      const p = this._pend && this._pend[key];
+      if (!p) return undefined;
+      if (Date.now() - p.ts > PEND_MS) { delete this._pend[key]; return undefined; }
+      return p.val;
+    }
+    /* Ask the car for fresh data shortly after a command instead of waiting for
+       the next poll. Only ever after a command — never on a timer, because this
+       wakes the car and spends API calls. */
+    _nudgeRefresh() {
+      const id = this._car && this._car._entities && this._car._entities.refresh;
+      if (!id || !this._hass) return;
+      clearTimeout(this._refT1); clearTimeout(this._refT2);
+      this._refT1 = setTimeout(() => this._call("button", "press", { entity_id: id }), 4000);
+      this._refT2 = setTimeout(() => this._call("button", "press", { entity_id: id }), 11000);
+    }
+
+    /* Measure the car's bounding box in an image, once per URL. Same-origin
+       (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
+       access-control-allow-origin:*, so crossOrigin="anonymous" works there
+       too. Anything else falls back to the traced calibration. */
+    _carBox(url, sfx) {
+      if (!url) return DF_CALIB[sfx];
+      this._boxes = this._boxes || {};
+      if (this._boxes[url]) return this._boxes[url];
+      this._measureBox(url, sfx);
+      return DF_CALIB[sfx];
+    }
+    _measureBox(url, sfx) {
+      this._boxTried = this._boxTried || {};
+      if (this._boxTried[url]) return;
+      this._boxTried[url] = true;
+      const vb = DF_VB[sfx] || [360, 600];
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try {
+          const cv = document.createElement("canvas");
+          const W = cv.width = img.naturalWidth, H = cv.height = img.naturalHeight;
+          if (!W || !H) throw new Error("no size");
+          const ctx = cv.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0);
+          const px = ctx.getImageData(0, 0, W, H).data;
+          let x0 = W, y0 = H, x1 = -1, y1 = -1;
+          for (let y = 0; y < H; y++) {
+            const row = y * W * 4;
+            for (let x = 0; x < W; x++) {
+              const i = row + x * 4;
+              /* rec.601 luma; the renders sit on a near-black ground */
+              if (0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2] > 45) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+              }
+            }
+          }
+          if (x1 <= x0 || y1 <= y0) throw new Error("nothing found");
+          this._boxes[url] = [x0 * vb[0] / W, y0 * vb[1] / H, x1 * vb[0] / W, y1 * vb[1] / H];
+          this._built = false;
+          if (this._hass) { this._build(); this._update(); }
+        } catch (e) {
+          this._boxes[url] = DF_CALIB[sfx];      // tainted canvas or odd image
+        }
+      };
+      img.onerror = () => { this._boxes[url] = DF_CALIB[sfx]; };
+      img.src = url;
+    }
+
     _defrostOn() {
+      const want = this._pendVal("defrost");
+      const real = this._defrostReal();
+      if (want === undefined) return real;
+      if (real === want) { delete this._pend.defrost; return real; }   // confirmed
+      return want;                                                     // still in flight
+    }
+    _defrostReal() {
       const ds = this._st("defrost_switch");
       if (ds) return ds.state === "on";
       const cs = this._st("climate");
       /* tesla_custom leaves preset_mode on "defrost" after the HVAC is switched
          off, which left the glass lit with the climate off. The app drops both
-         together, so treat an off/unknown climate as defrost off. */
+         together, so treat an off/unknown climate as defrost off. Note this is
+         only correct at steady state: for the first poll cycle after you press
+         Defrost the climate still reads "off" while preset is already
+         "defrost", which is exactly what _pendVal covers. */
       if (!cs || cs.state === "off" || cs.state === "unavailable" || cs.state === "unknown") return false;
       return cs.attributes.preset_mode === "defrost";
     }
@@ -638,12 +776,34 @@
   .defrostBtn { display:block; width:100%; background:#1f1f1f; border:none; color:#dcdcdc;
     font-family:inherit; font-size:12.5px; padding:10px 0; border-radius:10px; cursor:pointer; margin-top:12px; }
   .defrostBtn.on { color:#4fa3ff; }
+  /* honest "sent, waiting for the car" state rather than a silent lie */
+  .defrostBtn.pending, .pwr.pending { animation:dfPulse 1.5s ease-in-out infinite; }
+  @keyframes dfPulse { 0%,100% { opacity:1 } 50% { opacity:.55 } }
+  @media (prefers-reduced-motion:reduce) {
+    .defrostBtn.pending, .pwr.pending { animation:none; opacity:.75 } }
   .defrostBtn:active { background:#2c2c2c; }
   .battGlyph { width:24px; height:11px; border:1.5px solid #6f6f6f; border-radius:3px; position:relative; }
   .battGlyph:after { content:""; position:absolute; right:-4px; top:2.5px; width:2.5px; height:4px;
     background:#6f6f6f; border-radius:0 1px 1px 0; }
   .battFill { position:absolute; left:1px; top:1px; bottom:1px; background:#8f9296; border-radius:1px; }
   .battFill.chg { background:#4fd07a; } .battFill.low { background:#e0a63c; } .battFill.crit { background:#d53a3a; }
+  .noPack { padding:26px 20px 22px; text-align:center; color:#c9ccd1; }
+  .noPackCar { width:74px; height:30px; color:#5b6068; display:block; margin:0 auto 12px; }
+  .noPackTitle { font-size:15px; font-weight:600; color:#e9eaec; margin-bottom:7px; }
+  .noPackBody { font-size:12.8px; line-height:1.5; max-width:330px; margin:0 auto 12px; }
+  .noPackBody b { color:#e9eaec; }
+  .noPackHave { font-size:12.8px; line-height:1.5; max-width:330px; margin:0 auto 12px;
+                background:#1b1d21; border:1px solid #2b2e33; border-radius:8px; padding:9px 12px; }
+  .noPackHave ul { margin:6px 0; padding:0; list-style:none; }
+  .noPackHave li { padding:2px 0; color:#e9eaec; }
+  .noPackPath { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#8d9298;
+                background:#141619; border:1px solid #26282c; border-radius:6px;
+                padding:6px 9px; display:inline-block; margin-bottom:12px; }
+  .noPack a { color:#5ea0ff; }
+  .diag { margin-top:7px; padding:8px 10px; border-radius:7px; font-size:12.5px; line-height:1.45;
+          background:#3a2411; border:1px solid #6b4318; color:#f0c99a; max-width:520px; }
+  .diag code { background:#00000055; padding:1px 4px; border-radius:3px; font-size:12px; }
+  .diag b { color:#fff; }
   .sub { font-size:13px; color:#9b9b9b; margin-top:3px; }
   .hdr-r { display:flex; align-items:center; gap:8px; }
   .icobtn { background:none; border:none; width:32px; height:32px; border-radius:50%;
@@ -750,6 +910,7 @@
       <div class="battLine"><span class="battGlyph"><span class="battFill" id="battFill"></span></span>
         <span id="battTxt">—</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
       <div class="sub" id="sub">—</div>
+      <div class="diag" id="diag" hidden></div>
       <div class="carMenu" id="carMenu" hidden></div>
     </div>
     <div class="hdr-r">
@@ -954,15 +1115,24 @@
       });
       const dfBtn = q("btnDefrost");
       if (dfBtn) dfBtn.addEventListener("click", () => {
+        /* decide from the same source that lights the button, so a stale
+           preset_mode can't make the first press send the opposite command */
+        const want = !this._defrostOn();
         const ds = this._st("defrost_switch");
         if (ds) {                                         // tesla_fleet: a real defrost switch
-          this._call("switch", ds.state === "on" ? "turn_off" : "turn_on", { entity_id: ds.entity_id });
+          this._call("switch", want ? "turn_on" : "turn_off", { entity_id: ds.entity_id });
+          this._setPend("defrost", want);
           return;
         }
         const cs = this._st("climate");                   // tesla_custom: climate preset
         if (!cs) return;
-        const on = cs.attributes.preset_mode === "defrost";
-        this._call("climate", "set_preset_mode", { entity_id: cs.entity_id, preset_mode: on ? "normal" : "defrost" });
+        /* the app switches the climate on when you start defrosting; without
+           this the HVAC can sit "off" and the card cannot tell a real defrost
+           from a stale preset once the optimistic window closes */
+        if (want && cs.state === "off")
+          this._call("climate", "set_hvac_mode", { entity_id: cs.entity_id, hvac_mode: "heat_cool" });
+        this._call("climate", "set_preset_mode", { entity_id: cs.entity_id, preset_mode: want ? "defrost" : "normal" });
+        this._setPend("defrost", want);
       });
       const tU = q("tUp"), tD = q("tDn");
       if (tU) tU.addEventListener("click", () => this._bumpTemp(0.5));
@@ -1078,7 +1248,8 @@
       if (this._cars.length < 2) return;
       menu.innerHTML = this._cars
         .map((c, i) =>
-          '<button data-i="' + i + '"><span class="dot" style="background:' + c.color + '"></span>' +
+          '<button data-i="' + i + '"><span class="dot" style="background:' +
+            (PAINT_COLORS[String(c.paint || "").toLowerCase()] || "#f2f3f5") + '"></span>' +
           c.name + (c.model ? ' <span style="color:#8f8f8f;font-size:12px">' + c.model + "</span>" : "") +
           (i === this._sel ? " ✓" : "") + "</button>")
         .join("");
@@ -1113,6 +1284,10 @@
       if (!s) return;
       this._call("lock", s.state === "locked" ? "unlock" : "lock", { entity_id: s.entity_id });
     }
+    /* Switching the climate off ends defrost in the app. Dropping our
+       assumption isn't enough: the real preset_mode still reads "defrost" for a
+       poll cycle, so the glass would stay lit. Assert defrost-off instead, the
+       same way the Defrost button asserts defrost-on. */
     _toggleClimate() {
       const s = this._st("climate");
       if (!s) return;
@@ -1127,11 +1302,18 @@
         this._call("climate", "set_hvac_mode", { entity_id: s.entity_id, hvac_mode: "off" });
       }
       // optimistic: Tesla's state echo is slow — show the intent immediately
-      this._pendClim = { on: turningOn, ts: Date.now() };
-      this._update();
+      if (turningOn) { if (this._pend) delete this._pend.defrost; }
+      else this._setPend("defrost", false);
+      this._setPend("clim", turningOn);
     }
     _climOn() {
-      if (this._pendClim && Date.now() - this._pendClim.ts < 20000) return this._pendClim.on;
+      const want = this._pendVal("clim");
+      const real = this._climReal();
+      if (want === undefined) return real;
+      if (real === want) { delete this._pend.clim; return real; }
+      return want;
+    }
+    _climReal() {
       const s = this._st("climate");
       return !!s && s.state !== "off" && s.state !== "unavailable";
     }
@@ -1169,7 +1351,7 @@
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
-    ${dfGlow(rSfx, this._car)}
+    ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
   </svg>
   <button class="ctlBtn" id="ctlOpen">Controls</button>
 </div>`;
@@ -1183,7 +1365,7 @@
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
-    ${dfGlow(rSfx, this._car)}
+    ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
   </svg>
   <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="display:none">
     <path id="restCable" d="${cable}" stroke="#3f6db5" stroke-width="2.6" fill="none" stroke-linecap="round"/>
@@ -1242,7 +1424,7 @@
   ${this._car.calibrate ? '<div class="calib" id="calibOut">calibrate: tap the image to read x,y</div>' : ""}
   <svg class="car ovl" viewBox="0 0 360 773" preserveAspectRatio="none">
     <defs>${dfDefs("Top", this._car)}</defs>
-    ${dfGlow("Top", this._car)}
+    ${dfGlow("Top", this._car, null, this._carBox(tsrc, "Top"))}
     <g paint-order="stroke" stroke="#000000aa" stroke-width="3">
       <g id="frunkTap" class="tapa">
         <rect x="${fkx - 70}" y="${fky - 78}" width="140" height="130" rx="16" fill="#000" opacity="0" stroke="none"/>
@@ -1385,7 +1567,7 @@
       <clipPath id="coneClip-vR"><path d="M -11 0 L -46 188 Q 0 214 46 188 L 11 0 Z"/></clipPath>
       ${dfDefs("Clim", car)}
     </defs>
-    ${dfGlow("Clim", car)}
+    ${dfGlow("Clim", car, null, this._carBox(photo, "Clim"))}
     <g id="climHaze" style="display:none">
       ${vent(A.fl[0], -3, "vL")}
       ${vent(A.fr[0], 3, "vR")}
@@ -1479,146 +1661,37 @@
     /* Built-in fallback artwork — outlines traced 1:1 from reference photos of the
        real cars (Model 3 art currently shares the Model Y trace); the surface
        rendering is original. Tap/overlay anchors match the previous geometry. */
+    /* No image pack for this model+paint. There used to be a full drawn car
+       here as a fallback; it was removed deliberately — a hand-drawn car that
+       is not quite your car reads as broken, and it quietly removed any reason
+       to contribute a pack. Say what is missing, list what exists, recruit. */
     _carArt() {
-      const A = TeslaFleetCard._ART[/3/.test(String(this._car.model || "")) ? "3" : "y"];
-      /* the drawn art's glass is one runtime path, so its region is built here */
-      const dfArt = [{ k: "art", g: "art", raw: A.glass }];
-      const c = this._car.color || "#f2f3f5";
-      const light = lum(c) > 0.55;
-      const hi = shade(c, light ? 1.03 : 1.3);
-      const mid = c;
-      const lo = shade(c, light ? 0.78 : 0.55);
-      const edge = shade(c, light ? 0.55 : 0.34);
-      const onBody = light ? "#3c3f42" : "#e8e9ea";
-      const tint = this._car.hood_tint;
-      const dashY = 236.4;
+      const car = this._car;
+      const dir = /3/.test(String(car.model || "")) ? "3" : "y";
+      const slug = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
+      const path = "images/models/" + dir + "/" + (slug || "&lt;paint&gt;") + "/app/";
+      const have = PACKS_SHIPPED.map((p) =>
+        `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}</li>`).join("");
       return `
-<svg class="car" viewBox="0 0 360 640">
-  <defs>
-    <linearGradient id="bodyH" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="${lo}"/><stop offset=".2" stop-color="${mid}"/>
-      <stop offset=".45" stop-color="${hi}"/><stop offset=".55" stop-color="${hi}"/>
-      <stop offset=".8" stop-color="${mid}"/><stop offset="1" stop-color="${lo}"/>
-    </linearGradient>
-    <linearGradient id="bodyV" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="${light ? .4 : .26}"/>
-      <stop offset=".13" stop-color="#fff" stop-opacity="0"/>
-      <stop offset=".85" stop-color="#000" stop-opacity="0"/>
-      <stop offset="1" stop-color="#000" stop-opacity=".3"/>
-    </linearGradient>
-    <linearGradient id="glassG" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#23272d"/><stop offset=".12" stop-color="#101215"/>
-      <stop offset=".85" stop-color="#0d0f12"/><stop offset="1" stop-color="#080a0c"/>
-    </linearGradient>
-    <linearGradient id="tintG" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${tint || "transparent"}" stop-opacity=".8"/>
-      <stop offset="1" stop-color="${tint || "transparent"}" stop-opacity="0"/>
-    </linearGradient>
-    <radialGradient id="noseL" cx=".5" cy=".3" r=".72">
-      <stop offset="0" stop-color="#fff" stop-opacity="${light ? .3 : .2}"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="softB" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
-    <clipPath id="bodyC"><path d="${A.body}"/></clipPath>
-    <clipPath id="glassC"><path d="${A.glass}"/></clipPath>
-    ${dfDefs("Art", this._car, dfArt)}
-  </defs>
-
-  <ellipse cx="180" cy="334" rx="126" ry="288" fill="#000" opacity=".5" filter="url(#softB)"/>
-  <path d="${A.body}" fill="url(#bodyH)"/>
-  <path d="${A.body}" fill="url(#bodyV)"/>
-
-  <g clip-path="url(#bodyC)">
-    <ellipse cx="180" cy="116" rx="88" ry="58" fill="url(#noseL)"/>
-    ${tint ? '<rect x="60" y="56" width="240" height="140" fill="url(#tintG)"/>' : ""}
-    <path d="M132 84 C 128 108 130 140 142 172 M228 84 C 232 108 230 140 218 172"
-          fill="none" stroke="rgba(8,9,11,.4)" stroke-width="1.6"/>
-    <path d="M143 66 C 156 62 204 62 217 66" fill="none" stroke="rgba(8,9,11,.3)" stroke-width="1.2"/>
-    <path d="M70 160 C 70 116 84 84 114 66 L 104 60 C 76 78 62 112 64 160 Z" fill="#000" opacity=".16"/>
-    <path d="M290 160 C 290 116 276 84 246 66 L 256 60 C 284 78 298 112 296 160 Z" fill="#000" opacity=".16"/>
-    <path d="M92 612 C 140 622 220 622 268 612 L 268 640 L 92 640 Z" fill="#000" opacity=".22"/>
-    <path d="M92 556 L 104 552 L 105 566 L 93 570 Z" fill="none" stroke="rgba(8,9,11,.5)" stroke-width="1.1"/>
-  </g>
-
-  <path d="${A.lights[0]}" fill="#e9eff6"/>
-  <path d="${A.lights[1]}" fill="#e9eff6"/>
-
-  <path d="${A.glass}" fill="url(#glassG)"/>
-  <g clip-path="url(#glassC)">
-    <path d="M96 ${dashY} C 140 ${dashY - 12} 220 ${dashY - 12} 264 ${dashY}
-             L 264 ${dashY + 7} C 220 ${dashY - 5} 140 ${dashY - 5} 96 ${dashY + 7} Z"
-          fill="#3a3e45" opacity=".6"/>
-    <ellipse cx="143" cy="${dashY + 14}" rx="19" ry="6" fill="none" stroke="#26292e" stroke-width="3" opacity=".8"/>
-    <g fill="#1b1e22" opacity=".65">
-      <path d="M126 ${dashY + 46} h 38 a13 13 0 0 1 13 13 v 34 a13 13 0 0 1 -13 13 h -38 a13 13 0 0 1 -13 -13 v -34 a13 13 0 0 1 13 -13 Z"/>
-      <path d="M196 ${dashY + 46} h 38 a13 13 0 0 1 13 13 v 34 a13 13 0 0 1 -13 13 h -38 a13 13 0 0 1 -13 -13 v -34 a13 13 0 0 1 13 -13 Z"/>
-      <rect x="115" y="${dashY + 148}" width="130" height="52" rx="15"/>
-    </g>
-    <g fill="#262a30" opacity=".6">
-      <rect x="130" y="${dashY + 50}" width="30" height="11" rx="5.5"/>
-      <rect x="200" y="${dashY + 50}" width="30" height="11" rx="5.5"/>
-      <rect x="124" y="${dashY + 152}" width="26" height="9" rx="4.5"/>
-      <rect x="167" y="${dashY + 152}" width="26" height="9" rx="4.5"/>
-      <rect x="210" y="${dashY + 152}" width="26" height="9" rx="4.5"/>
-    </g>
-    <rect x="171" y="${dashY + 52}" width="18" height="66" rx="9" fill="#121417" opacity=".7"/>
-    <path d="M124 ${dashY - 28} L 166 ${dashY - 54} M178 ${dashY - 26} L 222 ${dashY - 52}"
-          stroke="#0a0b0d" stroke-width="3" stroke-linecap="round" opacity=".7"/>
-    <path d="${A.glass}" fill="none" stroke="#3c434c" stroke-width="2.5" opacity=".35"/>
-  </g>
-  <path d="${A.glass}" fill="none" stroke="#07080a" stroke-width="1.6" opacity=".9"/>
-  ${dfGlow("Art", this._car, dfArt)}
-
-  <g>
-    <path d="M74 246 L 52 238 C 44 235 40 240 43 247 C 46 256 55 262 65 261 L 78 258 Z" fill="${mid}" stroke="${edge}" stroke-width="1"/>
-    <path d="M286 246 L 308 238 C 316 235 320 240 317 247 C 314 256 305 262 295 261 L 282 258 Z" fill="${mid}" stroke="${edge}" stroke-width="1"/>
-    <path d="M48 242 C 52 240 59 241 63 244 C 64 250 61 255 56 256 C 50 256 46 252 45 247 C 45 244 46 243 48 242 Z" fill="#17191d"/>
-    <path d="M312 242 C 308 240 301 241 297 244 C 296 250 299 255 304 256 C 310 256 314 252 315 247 C 315 244 314 243 312 242 Z" fill="#17191d"/>
-  </g>
-  <path d="${A.body}" fill="none" stroke="${edge}" stroke-width="1.5"/>
-
-  <!-- frunk tap -->
-  <g id="frunkTap" class="tapa">
-    <rect x="118" y="80" width="124" height="98" rx="14" fill="#000" opacity="0"/>
-    <text id="frunkLbl" class="olbl" x="180" y="140" text-anchor="middle"
-          font-size="18" font-weight="600" fill="${onBody}">Open</text>
-  </g>
-  <!-- trunk tap (on rear glass) -->
-  <g id="trunkTap" class="tapa">
-    <rect x="118" y="470" width="124" height="76" rx="14" fill="#000" opacity="0"/>
-    <text id="trunkLbl" class="olbl" x="180" y="518" text-anchor="middle"
-          font-size="18" font-weight="600" fill="#cfd2d5">Open</text>
-  </g>
-  <!-- lock, centre of the roof -->
-  <g id="lockTap" class="tapa">
-    <circle cx="180" cy="404" r="28" fill="#000" opacity="0"/>
-    <g id="lockIcon" transform="translate(167,391) scale(1.1)"></g>
-  </g>
-  <!-- charge port, rear left by the taillight -->
-  <g id="boltG">
-    <path id="cableP" d="M 0 549 C 22 549 26 573 48 574 C 66 575 82 570 92 566"
-          stroke="#4a9eff" stroke-width="4.5" fill="none" stroke-linecap="round" style="display:none">
-      <animate attributeName="stroke-dashoffset" from="36" to="0" dur="1.2s" repeatCount="indefinite"/>
-    </path>
-    <rect id="portNub" x="90" y="560" width="10" height="11" rx="2.5" fill="#1a1c20" style="display:none"/>
-    <path id="portFlap" d="M 104 553 L 96 566 L 108 563 Z" fill="#c62f36" style="display:none"/>
-    <path id="boltP" d="M52 518 L 42 535 h 7 l -3.5 14 l 12 -19 h -7 l 5 -12 z" fill="#6f6f6f" style="display:none"/>
-  </g>
-  <!-- sentry -->
-  <g id="sentryEye" style="display:none">
-    <circle cx="180" cy="28" r="8" fill="#141414" stroke="#d53a3a" stroke-width="2"/>
-    <circle cx="180" cy="28" r="3" fill="#d53a3a">
-      <animate attributeName="opacity" values="1;.2;1" dur="1.6s" repeatCount="indefinite"/>
-    </circle>
-  </g>
-  <!-- TPMS corners -->
-  <g id="tpmsG" font-size="15" font-weight="600" fill="#ececec" ${this._config.show_tpms ? "" : 'style="display:none"'}>
-    <text id="tpFL" x="30" y="104" text-anchor="middle">—</text>
-    <text id="tpFR" x="330" y="104" text-anchor="middle">—</text>
-    <text id="tpRL" x="30" y="602" text-anchor="middle">—</text>
-    <text id="tpRR" x="330" y="602" text-anchor="middle">—</text>
-  </g>
-</svg>`;
+<div class="noPack">
+  <svg class="noPackCar" viewBox="0 0 64 26" aria-hidden="true">
+    <path d="M3 19 L6 12 C8 8 12 6 20 6 h16 c8 0 13 2 17 6 l4 7"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M2 19 h60" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="17" cy="19" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+    <circle cx="47" cy="19" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+  </svg>
+  <div class="noPackTitle">No image pack yet</div>
+  <div class="noPackBody">Nothing bundled for <b>${esc(car.model || "this model")}</b>
+    in <b>${esc(car.paint || "no paint set")}</b>. Everything else on this card works —
+    only the picture is missing.</div>
+  <div class="noPackHave">Packs that ship today:<ul>${have}</ul>
+    Set <b>Model</b> and <b>Paint</b> to one of these to borrow its artwork.</div>
+  <div class="noPackPath">${path}</div>
+  <div class="noPackBody">A pack is seven photos from the Tesla app. If you own this car,
+    you are the right person to build one —
+    <a href="https://github.com/MrNickIE/tesla-fleet-homeassistant" target="_blank" rel="noopener">contribute a pack</a>.</div>
+</div>`;
     }
 
     _setLockIcon(locked) {
@@ -1629,6 +1702,27 @@
 
     _update() {
       const q = (id) => this.shadowRoot.getElementById(id);
+
+      /* Detection is all-or-nothing: miss the battery entity and NOTHING
+         resolves, so the card used to render blank with no explanation of why
+         (issue #1 — the reporter had no way to tell it was a prefix problem). */
+      const dg = q("diag");
+      if (dg) {
+        const c0 = this._car;
+        if (c0 && !c0._integration && this._hass) {
+          const p = String(c0.prefix || "").replace(/[&<>"]/g, (m) =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+          dg.innerHTML = "No Tesla entities found for prefix <b>" + (p || "(empty)") + "</b>. " +
+            "This card looks for <code>sensor." + p + "battery</code> (Tesla Custom) or " +
+            "<code>sensor." + p + "battery_level</code> (Tesla Fleet). Open " +
+            "<b>Developer tools &rarr; States</b>, find your car's battery sensor, and set the " +
+            "prefix to everything between <code>sensor.</code> and <code>battery</code> " +
+            "(including the trailing underscore).";
+          dg.hidden = false;
+        } else {
+          dg.hidden = true;
+        }
+      }
 
       // battery line
       const pct = this._num("battery");
@@ -1761,7 +1855,6 @@
       // climate row
       const climS = this._st("climate");
       const climOn = this._climOn();
-      if (this._pendClim && Date.now() - this._pendClim.ts >= 20000) this._pendClim = null;
       const inT = this._num("inside_temp");
       const outT = this._num("outside_temp");
       q("climSub").textContent =
@@ -1811,10 +1904,15 @@
       }
       const dfOn = this._defrostOn();
       const dfB = q("btnDefrost");
-      if (dfB) dfB.classList.toggle("on", dfOn);
+      if (dfB) {
+        dfB.classList.toggle("on", dfOn);
+        dfB.classList.toggle("pending", this._pendVal("defrost") !== undefined);
+      }
+      const cpB = q("climPwr");
+      if (cpB) cpB.classList.toggle("pending", this._pendVal("clim") !== undefined);
       const dfBadge = q("battDefrost");
       if (dfBadge) dfBadge.style.display = dfOn ? "" : "none";
-      ["dfClim", "dfTop", "dfRest", "dfRestPlugged", "dfRestCharging", "dfArt"].forEach((gid) => {
+      ["dfClim", "dfTop", "dfRest", "dfRestPlugged", "dfRestCharging"].forEach((gid) => {
         const gg = q(gid);
         if (gg) gg.style.display = dfOn ? "" : "none";
       });
@@ -1911,7 +2009,8 @@
     setConfig(config) {
       this._config = JSON.parse(JSON.stringify(config || {}));
       if (!Array.isArray(this._config.cars) || !this._config.cars.length) {
-        this._config.cars = [{ name: "My Tesla", model: "", color: "#f2f3f5", prefix: "" }];
+        this._config.cars = [{ name: "My Tesla", model: PACK_DEFAULT.model,
+                               paint: PACK_DEFAULT.paint, prefix: "" }];
       }
       this._render();
     }
@@ -1935,10 +2034,10 @@
             ${["", "Model 3", "Model Y"].map((m) => `<option value="${m}" ${((c.model || "") === m) ? "selected" : ""}>${m || "—"}</option>`).join("")}
           </select></label>
           <label>Paint <select data-i="${i}" data-k="paint">
-            ${["", "red", "grey", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "—"}</option>`).join("")}
+            ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "—"}</option>`).join("")}
           </select></label>
           <label>Entity prefix <input data-i="${i}" data-k="prefix" value="${c.prefix || ""}" placeholder="e.g. buddy_"></label>
-          <div class="hint">The integration is auto-detected from the prefix. Advanced options — custom images, tap anchors, integration override, entity overrides — live in YAML (Show code editor); see the README.</div>
+          <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey) and tints the drawn fallback art. The integration is auto-detected from the prefix. Advanced options — custom images, tap anchors, integration override, entity overrides — live in YAML (Show code editor); see the README.</div>
         </div>`;
       });
       html += `<button class="add" id="add">+ Add car</button></div>`;
@@ -1946,7 +2045,16 @@
       this.shadowRoot.querySelectorAll("input, select").forEach((inp) =>
         inp.addEventListener("change", () => {
           const i = parseInt(inp.dataset.i, 10);
-          this._config.cars[i][inp.dataset.k] = inp.value;
+          const car = this._config.cars[i];
+          car[inp.dataset.k] = inp.value;
+          /* issue #1: picking a paint did nothing, because a stored `color`
+             (the old "+ Add car" always wrote blue) shadowed it at render time.
+             The picker now CLEARS color rather than writing a hex, so the UI
+             never produces one and `paint` stays the single source of truth.
+             `color` survives only as a hand-written YAML override. */
+          /* `color` is no longer read by the card; strip any left over from an
+             older config so it does not sit there implying it still does. */
+          if (inp.dataset.k === "paint") delete car.color;
           this._emit();
         })
       );
@@ -1958,7 +2066,11 @@
         })
       );
       this.shadowRoot.getElementById("add").addEventListener("click", () => {
-        this._config.cars.push({ name: "New car", model: "", color: "#3b6fd1", prefix: "" });
+        /* no color here on purpose: a hard-coded one shadows the paint picker */
+        /* default to a combination that actually has artwork, so a freshly
+           added car looks right before anything else is filled in */
+        this._config.cars.push({ name: "New car", model: PACK_DEFAULT.model,
+                                 paint: PACK_DEFAULT.paint, prefix: "" });
         this._render();
         this._emit();
       });
@@ -1968,18 +2080,6 @@
       this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
     }
   }
-
-  TeslaFleetCard._ART = (function(){
-    const Y = { body: "M 172.8 58.0 C 163.5 58.1 156.3 58.9 148.9 60.3 C 141.5 61.6 137.7 62.1 128.6 66.1 C 119.5 70.1 101.7 79.9 94.3 84.2 C 86.9 88.5 87.2 89.1 84.4 91.8 C 81.6 94.5 79.5 96.6 77.6 100.4 C 75.6 104.2 74.0 108.3 72.7 114.8 C 71.4 121.3 70.3 125.2 70.0 139.6 C 69.7 154.0 70.3 188.8 70.9 201.0 C 71.5 213.2 73.1 207.8 73.6 212.7 C 74.0 217.6 75.6 226.3 73.6 230.7 C 71.6 235.1 64.4 236.9 61.4 239.3 C 58.4 241.7 56.7 242.7 55.5 245.2 C 54.3 247.7 54.0 252.6 54.2 254.2 C 54.4 255.8 54.7 255.4 56.9 254.6 C 59.1 253.8 64.7 250.1 67.3 249.2 C 69.9 248.3 71.7 248.9 72.7 249.2 C 73.8 249.5 73.5 233.4 73.6 251.0 C 73.7 268.6 72.9 324.2 73.1 354.7 C 73.2 385.1 74.7 418.9 74.5 433.7 C 74.3 448.5 73.0 437.5 72.2 443.6 C 71.5 449.7 70.4 460.1 70.0 470.2 C 69.6 480.3 69.5 494.0 70.0 504.5 C 70.5 515.0 70.8 523.6 73.1 533.3 C 75.3 543.0 81.4 557.6 83.5 562.6 C 85.6 567.6 85.2 562.7 85.7 563.1 C 86.2 563.5 85.6 564.5 86.2 564.9 C 86.8 565.3 88.7 563.5 89.4 565.4 C 90.2 567.3 87.6 573.0 90.7 576.2 C 93.8 579.4 103.9 582.0 108.3 584.7 C 112.7 587.4 113.5 589.9 116.9 592.4 C 120.4 594.9 125.1 597.6 129.0 599.6 C 132.9 601.6 135.2 602.6 140.3 604.1 C 145.4 605.6 151.1 607.6 159.3 608.6 C 167.5 609.6 181.3 610.2 189.5 610.0 C 197.7 609.8 202.3 608.6 208.4 607.3 C 214.5 605.9 220.4 604.3 226.0 601.9 C 231.6 599.5 238.0 595.8 242.2 592.9 C 246.4 590.0 249.3 585.7 251.3 584.3 C 253.3 582.9 251.5 585.6 254.4 584.3 C 257.3 582.9 266.2 579.2 268.8 576.2 C 271.4 573.2 268.5 568.6 269.7 566.3 C 270.9 564.0 273.5 567.5 276.1 562.6 C 278.7 557.7 283.3 544.2 285.5 536.9 C 287.7 529.5 288.3 525.1 289.1 518.5 C 289.9 511.9 290.4 507.0 290.5 497.3 C 290.6 487.6 290.4 470.8 289.6 460.3 C 288.9 449.8 286.4 468.9 286.0 434.1 C 285.6 399.3 285.9 282.0 286.9 251.5 C 287.9 221.0 289.2 250.3 291.8 251.0 C 294.4 251.7 300.4 254.8 302.7 255.5 C 305.0 256.2 305.3 256.9 305.8 255.5 C 306.3 254.2 306.0 249.3 305.8 247.4 C 305.6 245.5 307.7 246.7 304.5 243.8 C 301.3 240.9 289.4 234.8 286.4 229.8 C 283.4 224.8 285.9 218.9 286.4 214.0 C 286.8 209.1 288.4 208.6 289.1 200.5 C 289.8 192.4 290.5 171.2 290.5 165.3 C 290.5 159.4 289.2 169.6 289.1 164.9 C 289.0 160.2 290.2 145.6 290.0 137.4 C 289.8 129.2 289.1 122.4 287.8 115.7 C 286.5 109.0 283.7 100.4 282.4 97.2 C 281.1 94.0 280.6 97.5 280.1 96.8 C 279.6 96.1 279.7 93.8 279.2 93.2 C 278.7 92.6 281.5 96.2 277.0 93.2 C 272.5 90.2 260.6 79.9 252.2 75.1 C 243.8 70.3 234.8 66.9 226.9 64.3 C 219.0 61.7 213.8 60.4 204.8 59.4 C 195.8 58.4 182.1 57.9 172.8 58.0 Z",
-      glass: "M 164.2 174.4 C 155.3 175.1 145.4 176.6 136.7 178.4 C 128.0 180.2 118.7 182.9 111.9 185.2 C 105.1 187.5 98.9 185.7 96.1 192.4 C 93.3 199.1 97.7 219.7 95.2 225.3 C 92.7 230.9 84.6 225.1 81.2 225.8 C 77.8 226.6 76.0 227.9 74.9 229.8 C 73.8 231.8 73.8 236.2 74.5 237.5 C 75.2 238.8 77.9 237.5 79.4 237.9 C 80.9 238.3 83.1 232.4 83.5 240.2 C 83.9 248.0 82.0 268.4 81.7 284.8 C 81.4 301.2 81.4 321.0 81.7 338.5 C 82.0 356.0 82.2 370.0 83.5 389.9 C 84.8 409.8 87.5 438.7 89.8 457.6 C 92.1 476.5 95.8 493.8 97.5 503.1 C 99.2 512.4 99.2 511.8 100.2 513.5 C 101.2 515.2 103.4 519.1 103.8 513.5 C 104.2 507.9 101.1 485.4 102.4 479.7 C 103.8 474.0 109.6 468.7 111.9 479.2 C 114.2 489.7 115.3 529.8 116.4 542.8 C 117.5 555.8 117.8 553.1 118.7 557.2 C 119.6 561.3 120.6 564.4 121.8 567.2 C 123.0 570.0 124.2 572.0 125.9 573.9 C 127.6 575.8 128.0 576.9 131.7 578.9 C 135.4 580.9 140.8 584.2 148.0 586.1 C 155.2 588.0 167.1 589.6 174.6 590.2 C 182.1 590.8 187.5 590.2 193.1 589.7 C 198.7 589.2 202.9 588.4 208.0 587.0 C 213.1 585.6 219.5 583.2 223.7 581.1 C 227.9 579.0 230.7 577.1 233.2 574.4 C 235.7 571.7 236.9 569.9 238.6 564.9 C 240.2 559.9 241.1 567.7 243.1 544.6 C 245.1 521.5 247.9 446.1 250.8 426.5 C 253.7 406.9 259.4 411.6 260.3 426.9 C 261.2 442.1 256.3 502.8 256.2 518.0 C 256.1 533.2 259.1 519.8 259.8 518.0 C 260.6 516.2 260.2 509.1 260.7 507.2 C 261.1 505.2 261.3 513.0 262.5 506.3 C 263.7 499.6 266.7 474.2 267.9 467.0 C 269.1 459.8 268.4 475.8 269.7 463.0 C 271.0 450.2 274.4 402.6 275.6 390.4 C 276.8 378.2 276.8 395.1 277.0 389.9 C 277.2 384.7 276.7 365.7 277.0 359.3 C 277.3 352.9 278.4 356.0 278.8 351.6 C 279.2 347.2 279.5 351.7 279.2 333.1 C 278.9 314.5 276.1 256.0 277.0 240.2 C 277.9 224.4 283.2 240.5 284.6 238.4 C 286.0 236.3 285.6 229.4 285.1 227.6 C 284.6 225.8 282.9 228.3 281.5 227.6 C 280.1 226.8 279.3 223.9 276.5 223.1 C 273.7 222.3 266.9 227.7 264.8 222.6 C 262.7 217.5 264.9 197.4 263.9 192.4 C 262.8 187.4 259.5 192.8 258.5 192.4 C 257.5 192.0 258.4 190.5 258.0 190.1 C 257.6 189.7 258.0 191.1 255.8 190.1 C 253.6 189.1 247.5 185.3 244.9 184.3 C 242.3 183.3 241.0 184.5 240.0 184.3 C 239.0 184.1 242.0 183.9 239.1 182.9 C 236.2 181.9 231.0 179.8 222.8 178.4 C 214.6 177.0 199.7 175.1 189.9 174.4 C 180.1 173.7 173.1 173.7 164.2 174.4 Z",
-      lights: ["M 119.1 78.7 C 118.9 77.8 113.8 80.3 111.0 81.5 C 108.2 82.7 105.6 84.0 102.4 86.0 C 99.2 88.0 95.0 90.8 92.1 93.2 C 89.2 95.6 86.0 99.1 84.8 100.4 C 83.6 101.8 83.7 102.3 84.8 101.3 C 85.9 100.3 88.3 96.8 91.2 94.5 C 94.1 92.2 99.7 88.4 102.0 87.3 C 104.3 86.2 104.6 87.3 105.1 87.8 C 105.6 88.3 106.7 89.0 105.1 90.5 C 103.5 92.0 97.7 95.1 95.7 96.8 C 93.8 98.5 94.1 100.0 93.4 100.8 C 92.7 101.5 92.5 99.7 91.6 101.3 C 90.7 102.9 89.0 106.8 88.0 110.3 C 87.0 113.8 85.5 120.0 85.3 122.0 C 85.1 124.0 85.8 122.5 86.6 122.0 C 87.4 121.5 87.7 123.3 90.3 118.9 C 92.9 114.5 99.0 100.7 102.4 95.4 C 105.8 90.1 108.8 88.7 110.5 87.3 C 112.2 85.9 111.0 88.3 112.4 86.9 C 113.8 85.5 119.3 79.6 119.1 78.7 Z", "M 258.0 88.2 C 256.4 88.0 259.5 93.8 259.4 95.0 C 259.3 96.2 255.9 91.5 257.6 95.4 C 259.3 99.3 267.1 114.1 269.7 118.4 C 272.2 122.7 272.9 122.5 272.9 121.1 C 272.9 119.7 270.2 112.8 269.7 109.9 C 269.2 107.0 269.2 104.6 269.7 103.5 C 270.2 102.4 272.0 102.8 272.9 103.1 C 273.8 103.4 274.8 105.6 275.2 105.4 C 275.6 105.2 276.2 103.8 275.2 102.2 C 274.2 100.6 272.2 98.2 269.3 95.9 C 266.4 93.6 259.6 88.4 258.0 88.2 Z"] };
-    Y.side = { body: "M 558 45 C 556.3 34.3 553.7 42.7 552 40 C 550.3 37.3 550.7 32.8 548 29 C 545.3 25.2 540.5 20.2 536 17 C 531.5 13.8 527.8 12.0 521 10 C 514.2 8.0 499.5 6.7 495 5 C 490.5 3.3 525.8 0.8 494 0 C 462.2 -0.8 335.8 -0.8 304 0 C 272.2 0.8 308.2 2.3 303 5 C 297.8 7.7 280.8 12.5 273 16 C 265.2 19.5 263.3 21.0 256 26 C 248.7 31.0 236.2 40.0 229 46 C 221.8 52.0 218.0 59.3 213 62 C 208.0 64.7 202.3 60.8 199 62 C 195.7 63.2 194.2 65.3 193 69 C 191.8 72.7 194.0 79.8 192 84 C 190.0 88.2 184.2 92.0 181 94 C 177.8 96.0 176.0 94.3 173 96 C 170.0 97.7 166.5 102.7 163 104 C 159.5 105.3 154.3 102.7 152 104 C 149.7 105.3 150.7 110.5 149 112 C 147.3 113.5 146.7 110.3 142 113 C 137.3 115.7 125.7 125.3 121 128 C 116.3 130.7 115.2 128.0 114 129 C 112.8 130.0 115.5 131.2 114 134 C 112.5 136.8 107.8 143.8 105 146 C 102.2 148.2 98.7 146.2 97 147 C 95.3 147.8 95.3 147.5 95 151 C 94.7 154.5 95.7 164.5 95 168 C 94.3 171.5 91.7 169.0 91 172 C 90.3 175.0 91.7 181.3 91 186 C 90.3 190.7 87.7 195.5 87 200 C 86.3 204.5 86.3 209.8 87 213 C 87.7 216.2 90.3 217.0 91 219 C 91.7 221.0 89.3 222.3 91 225 C 92.7 227.7 98.3 233.3 101 235 C 103.7 236.7 105.8 236.7 107 235 C 108.2 233.3 106.0 226.5 108 225 C 110.0 223.5 117.0 224.0 119 226 C 121.0 228.0 120.8 235.0 120 237 C 119.2 239.0 115.0 236.2 114 238 C 113.0 239.8 113.3 245.5 114 248 C 114.7 250.5 116.2 251.7 118 253 C 119.8 254.3 123.0 254.3 125 256 C 127.0 257.7 128.3 261.8 130 263 C 131.7 264.2 134.0 262.0 135 263 C 136.0 264.0 132.0 267.0 136 269 C 140.0 271.0 154.5 273.3 159 275 C 163.5 276.7 160.0 278.0 163 279 C 166.0 280.0 172.3 279.7 177 281 C 181.7 282.3 178.3 285.5 191 287 C 203.7 288.5 236.3 290.3 253 290 C 269.7 289.7 284.3 286.5 291 285 C 297.7 283.5 289.7 282.3 293 281 C 296.3 279.7 308.0 278.5 311 277 C 314.0 275.5 309.8 273.2 311 272 C 312.2 270.8 316.8 271.2 318 270 C 319.2 268.8 316.5 266.5 318 265 C 319.5 263.5 325.2 262.8 327 261 C 328.8 259.2 327.0 256.3 329 254 C 331.0 251.7 330.5 250.8 339 247 C 347.5 243.2 372.5 234.3 380 231 C 387.5 227.7 382.5 227.7 384 227 C 385.5 226.3 386.0 228.5 389 227 C 392.0 225.5 397.7 219.8 402 218 C 406.3 216.2 406.2 219.5 415 216 C 423.8 212.5 447.0 200.2 455 197 C 463.0 193.8 459.5 198.0 463 197 C 466.5 196.0 468.0 192.7 476 191 C 484.0 189.3 504.7 188.3 511 187 C 517.3 185.7 512.5 183.7 514 183 C 515.5 182.3 517.5 183.8 520 183 C 522.5 182.2 526.2 180.3 529 178 C 531.8 175.7 535.3 171.7 537 169 C 538.7 166.3 537.8 163.5 539 162 C 540.2 160.5 542.8 163.3 544 160 C 545.2 156.7 544.8 145.7 546 142 C 547.2 138.3 550.2 142.5 551 138 C 551.8 133.5 549.8 119.0 551 115 C 552.2 111.0 556.2 115.8 558 114 C 559.8 112.2 562.0 115.5 562 104 C 562.0 92.5 559.7 55.7 558 45 Z",
-      glass: "M 194 97 C 194.8 99.8 194.2 100.7 200 103 C 205.8 105.3 223.2 108.8 229 111 C 234.8 113.2 227.8 113.5 235 116 C 242.2 118.5 259.8 123.7 272 126 C 284.2 128.3 300.5 131.0 308 130 C 315.5 129.0 314.3 122.2 317 120 C 319.7 117.8 321.0 121.0 324 117 C 327.0 113.0 332.5 99.7 335 96 C 337.5 92.3 338.3 95.8 339 95 C 339.7 94.2 338.3 92.3 339 91 C 339.7 89.7 341.0 87.7 343 87 C 345.0 86.3 349.7 88.7 351 87 C 352.3 85.3 350.3 78.8 351 77 C 351.7 75.2 354.3 78.2 355 76 C 355.7 73.8 353.5 66.8 355 64 C 356.5 61.2 360.5 59.8 364 59 C 367.5 58.2 374.2 56.2 376 59 C 377.8 61.8 376.3 71.8 375 76 C 373.7 80.2 369.7 82.7 368 84 C 366.3 85.3 365.7 83.0 365 84 C 364.3 85.0 365.5 89.0 364 90 C 362.5 91.0 357.3 88.0 356 90 C 354.7 92.0 356.8 99.3 356 102 C 355.2 104.7 353.3 102.5 351 106 C 348.7 109.5 343.5 118.8 342 123 C 340.5 127.2 340.5 129.5 342 131 C 343.5 132.5 348.7 135.3 351 132 C 353.3 128.7 354.7 115.0 356 111 C 357.3 107.0 353.2 108.0 359 108 C 364.8 108.0 379.8 113.3 391 111 C 402.2 108.7 419.7 97.7 426 94 C 432.3 90.3 423.5 91.7 429 89 C 434.5 86.3 453.7 80.5 459 78 C 464.3 75.5 459.5 74.8 461 74 C 462.5 73.2 464.0 75.0 468 73 C 472.0 71.0 481.3 64.8 485 62 C 488.7 59.2 487.7 57.7 490 56 C 492.3 54.3 496.0 54.7 499 52 C 502.0 49.3 506.2 43.7 508 40 C 509.8 36.3 510.2 31.8 510 30 C 509.8 28.2 507.5 31.2 507 29 C 506.5 26.8 505.0 19.2 507 17 C 509.0 14.8 517.0 16.8 519 16 C 521.0 15.2 523.3 13.5 519 12 C 514.7 10.5 497.5 9.0 493 7 C 488.5 5.0 523.2 1.2 492 0 C 460.8 -1.2 337.2 -1.2 306 0 C 274.8 1.2 311.5 3.3 305 7 C 298.5 10.7 279.3 15.2 267 22 C 254.7 28.8 237.8 42.3 231 48 C 224.2 53.7 227.7 54.5 226 56 C 224.3 57.5 222.3 55.7 221 57 C 219.7 58.3 219.3 62.7 218 64 C 216.7 65.3 214.7 63.0 213 65 C 211.3 67.0 211.0 72.5 208 76 C 205.0 79.5 197.3 82.5 195 86 C 192.7 89.5 193.2 94.2 194 97 Z",
-      frontLower: "M 355 234 C 351.8 233.5 339.5 238.0 336 235 C 332.5 232.0 335.8 222.2 334 216 C 332.2 209.8 326.5 202.0 325 198 C 323.5 194.0 327.8 193.2 325 192 C 322.2 190.8 313.3 190.0 308 191 C 302.7 192.0 298.2 193.8 293 198 C 287.8 202.2 280.3 211.7 277 216 C 273.7 220.3 274.0 220.0 273 224 C 272.0 228.0 272.0 237.2 271 240 C 270.0 242.8 268.2 236.0 267 241 C 265.8 246.0 265.5 264.2 264 270 C 262.5 275.8 269.7 274.8 258 276 C 246.3 277.2 205.2 277.5 194 277 C 182.8 276.5 192.7 274.0 191 273 C 189.3 272.0 185.3 273.8 184 271 C 182.7 268.2 184.7 258.8 183 256 C 181.3 253.2 177.0 255.7 174 254 C 171.0 252.3 168.8 247.5 165 246 C 161.2 244.5 153.5 245.7 151 245 C 148.5 244.3 151.8 242.7 150 242 C 148.2 241.3 142.5 241.8 140 241 C 137.5 240.2 137.3 237.7 135 237 C 132.7 236.3 127.7 235.7 126 237 C 124.3 238.3 124.7 243.5 125 245 C 125.3 246.5 127.5 244.0 128 246 C 128.5 248.0 127.3 254.5 128 257 C 128.7 259.5 130.5 260.3 132 261 C 133.5 261.7 136.0 260.0 137 261 C 138.0 262.0 134.0 265.0 138 267 C 142.0 269.0 156.5 271.3 161 273 C 165.5 274.7 162.0 276.0 165 277 C 168.0 278.0 174.3 277.7 179 279 C 183.7 280.3 181.0 283.5 193 285 C 205.0 286.5 235.0 288.3 251 288 C 267.0 287.7 282.3 284.5 289 283 C 295.7 281.5 287.7 280.3 291 279 C 294.3 277.7 306.0 276.5 309 275 C 312.0 273.5 307.8 271.2 309 270 C 310.2 268.8 314.8 269.2 316 268 C 317.2 266.8 314.5 264.5 316 263 C 317.5 261.5 323.0 261.0 325 259 C 327.0 257.0 325.3 253.3 328 251 C 330.7 248.7 338.3 247.0 341 245 C 343.7 243.0 341.7 240.2 344 239 C 346.3 237.8 353.2 238.8 355 238 C 356.8 237.2 358.2 234.5 355 234 Z",
-      rearDark: "M 542 103 C 539.8 100.8 536.7 100.3 532 102 C 527.3 103.7 520.0 104.2 514 113 C 508.0 121.8 499.0 146.2 496 155 C 493.0 163.8 498.3 162.3 496 166 C 493.7 169.7 490.0 173.3 482 177 C 474.0 180.7 458.5 183.2 448 188 C 437.5 192.8 425.5 203.0 419 206 C 412.5 209.0 413.3 204.8 409 206 C 404.7 207.2 396.3 210.8 393 213 C 389.7 215.2 393.0 217.2 389 219 C 385.0 220.8 372.7 222.0 369 224 C 365.3 226.0 365.5 230.2 367 231 C 368.5 231.8 372.5 231.5 378 229 C 383.5 226.5 394.2 218.5 400 216 C 405.8 213.5 404.2 217.5 413 214 C 421.8 210.5 445.0 198.2 453 195 C 461.0 191.8 457.8 196.0 461 195 C 464.2 194.0 464.0 190.7 472 189 C 480.0 187.3 502.3 186.3 509 185 C 515.7 183.7 510.5 181.7 512 181 C 513.5 180.3 515.5 181.8 518 181 C 520.5 180.2 524.2 178.3 527 176 C 529.8 173.7 533.3 169.8 535 167 C 536.7 164.2 535.8 160.5 537 159 C 538.2 157.5 540.8 161.2 542 158 C 543.2 154.8 542.8 143.7 544 140 C 545.2 136.3 548.2 140.0 549 136 C 549.8 132.0 549.7 119.5 549 116 C 548.3 112.5 546.2 117.2 545 115 C 543.8 112.8 544.2 105.2 542 103 Z",
-      lights: ["M 262 179 C 262.0 178.0 249.5 182.7 244 185 C 238.5 187.3 229.0 192.0 229 193 C 229.0 194.0 238.5 193.3 244 191 C 249.5 188.7 262.0 180.0 262 179 Z", "M 119 134 C 119.3 132.2 111.2 140.2 109 143 C 106.8 145.8 106.3 149.2 106 151 C 105.7 152.8 104.8 156.8 107 154 C 109.2 151.2 118.7 135.8 119 134 Z"] };
-    return { y: Y, "3": Y };
-  })();
 
   customElements.define("tesla-fleet-card", TeslaFleetCard);
   customElements.define("tesla-fleet-card-editor", TeslaFleetCardEditor);
