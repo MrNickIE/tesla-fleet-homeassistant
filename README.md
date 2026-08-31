@@ -1,0 +1,156 @@
+# Tesla Fleet Card
+
+**A Tesla-app-style card for your Home Assistant dashboard.** One card shows your
+whole fleet — battery, range, charging, climate, locks, location — looking and
+behaving like the official Tesla app, and switching between cars in one click.
+
+Works with **both** Tesla integrations, automatically:
+[tesla_custom](https://github.com/alandtse/tesla) (HACS) **and** the official
+**tesla_fleet** integration.
+
+> ⚡ **Fully vibecoded.** Not a single line of this was typed by a human.
+> It was built conversationally with Claude (Anthropic), iterating against
+> screenshots and screen recordings of the real Tesla app until the two were
+> hard to tell apart. Bugs are the AI's fault; the good ideas were Nick's. 🙂
+
+---
+
+## Install
+
+**Via HACS (recommended):**
+
+1. HACS → three-dots menu (top right) → **Custom repositories**.
+2. Paste this repository's URL, choose category **Dashboard**, click **Add**.
+3. Find **Tesla Fleet Card** in HACS and click **Download**.
+4. Hard-refresh your browser (Ctrl+F5 / Cmd+Shift+R). HACS registers the
+   dashboard resource automatically; if the card still says
+   "Custom element doesn't exist", check Settings → Dashboards → three-dots →
+   **Resources** for `/hacsfiles/tesla-fleet-homeassistant/tesla-fleet-card.js`
+   (type *module*) and add it if missing.
+
+**Manual install:** copy `tesla-fleet-card.js` to `/config/www/`, add a
+dashboard resource `/local/tesla-fleet-card.js` (type *module*), and bump a
+`?v=` query string on that URL every time you update the file.
+
+## Quick start
+
+1. Edit your dashboard → **Add card** → search **Tesla Fleet Card**.
+2. Fill in the four fields:
+   - **Name** — whatever you call the car.
+   - **Model** — Model 3 or Model Y (picks the built-in artwork).
+   - **Paint** — red, grey, … (picks the image pack and artwork colour).
+   - **Entity prefix** — how your car's entities are named. Look at your
+     battery entity: `sensor.battery` → leave empty; `sensor.saoirse_battery`
+     → enter `saoirse_`. Works for both integrations; the card detects which
+     one you're on.
+3. Save. Add more cars with **+ Add car** — a dropdown on the car's name
+   switches between them.
+
+The same config in YAML:
+
+```yaml
+type: custom:tesla-fleet-card
+cars:
+  - name: Patsy
+    model: Model Y
+    paint: red
+    prefix: ""
+```
+
+## What you get
+
+- **Home view** — your car resting, like the app's opening screen. Plugging in
+  swaps to the cable shot; charging animates a green pulse along the cable
+  (timing measured from the real app, frame by frame). Tap the car for
+  Controls.
+- **Controls view** — top-down car with tappable frunk/boot **Open** labels
+  (two-tap confirm), lock/unlock on the roof, tyre pressures at the corners
+  (psi or bar, whatever your integration reports), and a breathing charge bolt
+  while charging.
+- **Climate view** — the interior. Tap any seat to cycle its heater (levels
+  come from your integration), tap the steering wheel for its heater, set the
+  temperature, Vent, **Defrost Car**.
+- **Charging panel** — charge-limit slider with a click-stop at 80 %, live
+  `kW · +kWh · A/maxA · V` stats, "1h 5m remaining to charge limit" in the
+  header, amps stepper, Stop Charging / Unlock Charge Port as applicable.
+- **Action row** — Flash, Honk, Port, Start, Vent (destructive ones need a
+  second tap).
+- **No images needed** — everything above works out of the box with built-in
+  drawn artwork in your paint colour. Real photos make it beautiful; see below.
+
+## Images
+
+The card looks for images in this order — first hit wins:
+
+1. **Per-car options in YAML** — `image`, `image_side`, `image_charging`,
+   `image_climate` and friends, each a `/local/...` path or full URL.
+2. **A per-car pack folder** — `images: /local/my-pack` (or any URL base,
+   e.g. a CDN or GitHub raw path).
+3. **The shared pack folder** — `/config/www/tesla-fleet-card/images/` using
+   the layout `models/<3|y>/<paint>/app/`. Drop packs here once; the card
+   finds them from each car's Model + Paint with zero config, and HACS
+   updates never touch this folder.
+4. Nothing found → built-in drawn artwork.
+
+A pack is seven JPEGs with these names and sizes:
+
+| File | Size (px) | What it shows |
+| --- | --- | --- |
+| `topdown.jpg` | 720 × 1284 | Top-down car, nose at top, ~2 % margin, background `#141414`. |
+| `topdown-plugged.jpg` | 720 × 1284 | Same, charge cable attached. |
+| `topdown-charging.jpg` | 720 × 1284 | Same, charging. |
+| `side.jpg` | 660 × 330 | Resting ¾ view, centred. |
+| `side-plugged.jpg` | 660 × 330 | Same, cable attached. |
+| `side-charging.jpg` | 660 × 375 | Same, charging, cable in shot. |
+| `climate.jpg` | 720 × 1200 | Interior top-down: dash ~10 % down, front seats ~27 %, rear bench ~48 %. |
+
+Make your own from your own Tesla app: screenshot the app's home screen
+(parked, plugged, charging), Controls and Climate pages full-screen on the
+biggest display you have, crop to the car, patch out the baked-in UI labels
+(the card draws live ones), save to the sizes above on `#141414`.
+
+**Controls not lining up on your images?** Set `calibrate: true` on the car,
+tap the image where each control sits, read the coordinates off the badge, and
+put them in `climate_anchors:` / `top_anchors:` (then remove `calibrate`).
+Images made to the spec table need none of this.
+
+## All YAML options
+
+Per car:
+
+| Option | What it does |
+| --- | --- |
+| `name`, `model`, `paint` | As in the editor. `paint` picks the pack folder and artwork colour. |
+| `prefix` | Entity prefix. |
+| `integration` | `auto` (default) / `tesla_custom` / `tesla_fleet`. |
+| `entities:` | Per-entity overrides, e.g. `energy_added: sensor.modely_energy_added`. |
+| `color` | Artwork colour override (hex) if `paint` isn't enough. |
+| `hood_tint` | Bonnet wrap tint for the artwork. |
+| `images` | Pack base folder or URL for this car. |
+| `image`, `image_top_plugged`, `image_top_charging` | Top-down photos. |
+| `image_side`, `image_side_plugged`, `image_charging` | Resting-view photos. |
+| `image_climate` | Interior photo. |
+| `cable: baked` | Photos already contain the cable (automatic when a pack is in use). |
+| `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
+| `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
+
+Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
+bar), `accent`.
+
+## Updating
+
+HACS shows updates as versioned releases. After updating, hard-refresh the
+browser. The running version prints in the browser console when the card
+loads.
+
+## Requirements
+
+Home Assistant with the [tesla_custom](https://github.com/alandtse/tesla)
+HACS integration or the official tesla_fleet integration — and a Tesla. 🚗
+
+## Credits
+
+Designed by mimicking the official Tesla app. Built end-to-end by
+[Claude](https://claude.ai) in conversation with MrNickIE, who supplied
+the screenshots, the screen recordings, the opinions, and the phrase
+"you have drawn a SPACESHIP". Shared under the MIT licence — enjoy.
