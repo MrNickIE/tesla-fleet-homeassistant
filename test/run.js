@@ -467,8 +467,104 @@ function customStates(p) {
     R.paint_clears_stale_color = emitted.cars[0].color === undefined;
     R.paint_is_written = emitted.cars[0].paint;
 
+    /* ---- the Generation field appears only where it is needed ---------- */
+    const onlineWithVin = (p, vin) => {
+      const st = {};
+      st["binary_sensor." + p + "online"] = { entity_id: "binary_sensor." + p + "online",
+        state: "on", attributes: { vin: vin } };
+      return st;
+    };
+    const genField = (car, vin) => {
+      ed._rendered = false;
+      ed.hass = { states: onlineWithVin(car.prefix, vin) };
+      ed.setConfig({ type: "custom:tesla-fleet-card", cars: [car] });
+      const sel = ed.shadowRoot.querySelector('[data-k="generation"]');
+      return sel ? [...sel.options].map((o) => o.value) : null;
+    };
+    /* a 2023 Model 3 is the one case the year cannot settle, so ask */
+    R.gen_field_ambiguous = genField(
+      { name: "A", model: "Model 3", paint: "grey", prefix: "a_" }, "LRW3F7FS4PC762296");
+    /* a 2024 Model 3 decides itself, so do not clutter it */
+    R.gen_field_decided = genField(
+      { name: "B", model: "Model 3", paint: "grey", prefix: "b_" }, "LRW3F7FS5RC043917");
+    /* a Model Y is never ambiguous, whatever the year */
+    R.gen_field_modely = genField(
+      { name: "C", model: "Model Y", paint: "red", prefix: "c_" }, "LRWYHCEKXPC730074");
+    /* no VIN means no year, which is not a question the user can be asked
+       usefully, so stay quiet and leave `generation` to YAML */
+    (() => {
+      ed._rendered = false;
+      ed.hass = { states: {} };
+      ed.setConfig({ type: "custom:tesla-fleet-card",
+        cars: [{ name: "D", model: "Model 3", paint: "grey", prefix: "d_" }] });
+      R.gen_field_no_vin = !!ed.shadowRoot.querySelector('[data-k="generation"]');
+    })();
+    /* an answered car keeps the field, or the control vanishes under the hand
+       that just used it */
+    (() => {
+      ed._rendered = false;
+      ed.hass = { states: onlineWithVin("e_", "LRW3F7FS5RC043917") };
+      ed.setConfig({ type: "custom:tesla-fleet-card",
+        cars: [{ name: "E", model: "Model 3", paint: "grey", prefix: "e_",
+                 generation: "classic" }] });
+      const sel = ed.shadowRoot.querySelector('[data-k="generation"]');
+      R.gen_field_sticks = !!sel;
+      R.gen_field_selected = sel ? sel.value : null;
+      if (sel) { sel.value = ""; sel.dispatchEvent(new Event("change")); }
+      R.gen_cleared_removes_key = emitted.cars[0].generation === undefined;
+    })();
+
     return R;
   }, customStates.toString());
+
+  /* ---- the card refuses to borrow the other generation's bodywork -------
+     This one needs the real probe, so `fetch` is stubbed to answer HEAD for
+     one pack folder and 404 for everything else. That is exactly the situation
+     on GitHub raw today: models/3/grey/app exists and is the Highland pack,
+     and no models/3-classic/grey/app exists yet. */
+  Object.assign(r, await page.evaluate(async (customStatesSrc) => {
+    const customStates = eval("(" + customStatesSrc + ")");
+    const R = {};
+    const realFetch = window.fetch;
+    const serveOnly = (needle) => {
+      window.fetch = (url) => Promise.resolve({ ok: String(url).indexOf(needle) >= 0 });
+    };
+    const render = async (car, vin) => {
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [car] });
+      const st = customStates(car.prefix);
+      st["binary_sensor." + car.prefix + "online"] = {
+        entity_id: "binary_sensor." + car.prefix + "online",
+        state: "on", attributes: { vin: vin } };
+      c.hass = { states: st };
+      await new Promise((z) => setTimeout(z, 120));
+      return !!c.shadowRoot.getElementById("restImg");
+    };
+    const M3 = { model: "Model 3", paint: "grey" };
+    const HIGHLAND = "LRW3F7FS5RC043917";   /* 2024 */
+    const CLASSIC = "LRW3F7FR3NC609256";    /* 2022 */
+
+    serveOnly("raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/models/3/grey/app/");
+    /* the Highland pack is the right car for a Highland, so use it */
+    R.pack_highland_gets_pack = await render(
+      Object.assign({ name: "H", prefix: "h_" }, M3), HIGHLAND);
+    /* and it is a photograph of the wrong car for a pre-refresh one */
+    R.pack_classic_refuses = await render(
+      Object.assign({ name: "K", prefix: "k_" }, M3), CLASSIC);
+    /* unless the owner would rather have the wrong bodywork than no picture */
+    R.pack_classic_opt_in = await render(
+      Object.assign({ name: "O", prefix: "o_", allow_other_generation: true }, M3), CLASSIC);
+
+    /* a pack of the user's OWN at the same path has no recorded generation, so
+       the card has no business refusing it */
+    serveOnly("/local/tesla-fleet-card/images/models/3/grey/app/");
+    R.pack_local_not_judged = await render(
+      Object.assign({ name: "L", prefix: "l_" }, M3), CLASSIC);
+
+    window.fetch = realFetch;
+    return R;
+  }, customStates.toString()));
 
   console.log("\nintegration detection");
   check("tesla_custom detected", r.detect_custom, "tesla_custom");
@@ -617,6 +713,21 @@ function customStates(p) {
   check("remove car", r.editor_remove_car, 2);
   check("picking a paint clears a stale colour", r.paint_clears_stale_color, true);
   check("picking a paint is written", r.paint_is_written, "white");
+
+  console.log("\nthe wrong generation is refused");
+  check("a Highland gets the Highland pack",   r.pack_highland_gets_pack, true);
+  check("a pre-refresh car refuses it",        r.pack_classic_refuses, false);
+  check("allow_other_generation opts back in", r.pack_classic_opt_in, true);
+  check("a local pack is not judged",          r.pack_local_not_judged, true);
+
+  console.log("\nthe Generation field");
+  check("a 2023 Model 3 is asked",         r.gen_field_ambiguous, ["", "highland", "classic"]);
+  check("a 2024 Model 3 is not asked",     r.gen_field_decided, null);
+  check("a Model Y is not asked",          r.gen_field_modely, null);
+  check("no VIN means no question",        r.gen_field_no_vin, false);
+  check("an answered car keeps the field", r.gen_field_sticks, true);
+  check("the answer is shown as selected", r.gen_field_selected, "classic");
+  check("clearing it removes the key",     r.gen_cleared_removes_key, true);
 
   await browser.close();
   console.log("\n" + passed + " passed, " + failures.length + " failed");

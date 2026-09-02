@@ -1,5 +1,7 @@
 # Tesla Fleet Card
 
+<img src="docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
+
 **A Tesla-app-style card for your Home Assistant dashboard.** One card shows your
 whole fleet - battery, range, charging, climate, locks, location - looking and
 behaving like the official Tesla app, and switching between cars in one click.
@@ -149,11 +151,23 @@ A pack at a generation-qualified path wins if one exists, so
 Model Y properly. **Contributions of the missing combinations are very
 welcome** - see below.
 
-If no pack matches your generation, the card falls back to one in your paint
-from the other generation: the colour is right and the bodywork is not. That
-is deliberate, because paint is the thing you configured and a wrong colour is
-the more jarring of the two mistakes, but the card is not quiet about it -
-hover the car photo and it tells you which generation you are looking at.
+**If the only pack in your paint is the other generation's, the card will not
+use it.** It knows which generation each pack in this repository is, so serving
+a pre-refresh Model 3 the Highland photos would just be showing you a
+photograph of a different car. You get the no-pack panel instead, naming the
+folder somebody needs to fill. Earlier versions did borrow the other
+generation's bodywork, on the grounds that the colour was at least right; that
+turned out to be a good way to make wrong artwork look official and to remove
+any reason to fix it.
+
+If you would rather have a picture of nearly your car than no picture, set
+`allow_other_generation: true` on the car and the old behaviour comes back.
+The card is not quiet about it either way: hover the car photo and it tells you
+which generation you are looking at.
+
+A pack of your own under `/config/www/tesla-fleet-card/images/` is never
+refused, whatever folder you put it in. The card has no idea which generation
+your photos are of, so it does not presume to judge them.
 
 **Controls not lining up on your images?** Set `calibrate: true` on the car,
 tap the image where each control sits, read the coordinates off the badge, and
@@ -180,7 +194,8 @@ Per car:
 | `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
 | `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. |
 | `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
-| `generation` | Which body generation this car is, when the model year cannot say: `classic`, `highland` or `juniper`. Only needed for a 2023 Model 3, which could be either. |
+| `generation` | Which body generation this car is, when the model year cannot say: `classic`, `highland` or `juniper`. Only needed for a 2023 Model 3, which could be either, and the visual editor asks you for exactly that car rather than making you come here. |
+| `allow_other_generation` | Use a pack from the other body generation when nothing matches yours. Off by default, because the result is a photograph of a different car. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
 bar), `accent`, `drive_speed`, `show_vin`.
@@ -297,7 +312,7 @@ npm install
 npm test
 ```
 
-99 checks covering entity detection on both integrations, the per-car entity
+110 checks covering entity detection on both integrations, the per-car entity
 overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
 and year, and the driving view including the geometry that keeps the wheels
 rolling at the same speed as the road. It exits non-zero on failure.

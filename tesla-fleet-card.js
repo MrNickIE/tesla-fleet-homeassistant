@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.5";
+  const CARD_VERSION = "1.1.6";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -533,6 +533,48 @@
                       highland: "Highland (2024 refresh)" };
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
 
+  /* The generation of every pack THIS REPO ships, keyed by its folder. This is
+     what lets the card refuse to serve a car the wrong bodywork: the folder
+     models/3/grey/app is the Highland pack, it is just named from before
+     generations were a thing. */
+  const SHIPPED_GEN = {};
+  PACKS_SHIPPED.forEach((p) => { if (p.dir && p.gen) SHIPPED_GEN[p.dir] = p.gen; });
+
+  /* Which body generation a model year implies, or null when the year honestly
+     cannot say. There is one such case and it matters: a 2023 Model 3, because
+     Highland reached North America in January 2024, so a 2023 build could be
+     either car. At module scope because the editor needs the same rule to know
+     whether to ask, and two copies of it would drift apart. */
+  function genFromYear(model, yr) {
+    if (!yr) return null;
+    const m = String(model || "").toLowerCase().replace(/\s+/g, "");
+    if (m.indexOf("modely") >= 0 || m === "y") return yr >= 2026 ? "juniper" : "classic";
+    if (m.indexOf("model3") >= 0 || m === "3") {
+      if (yr >= 2024) return "highland";
+      if (yr <= 2022) return "classic";
+      return null;
+    }
+    return null;
+  }
+  function yearFromVin(vin) {
+    const v = String(vin || "").toUpperCase();
+    return v.length === 17 ? (VIN_YEAR[v.charAt(9)] || null) : null;
+  }
+  /* The VIN is an attribute on the online binary sensor, which is the cheapest
+     place to read it: no entity registry call, and it is there whether the car
+     is awake or not. */
+  function vinForPrefix(hass, prefix) {
+    const p = String(prefix || "");
+    const ids = ["binary_sensor." + p + "online"];
+    if (p && p.charAt(p.length - 1) !== "_") ids.push("binary_sensor." + p + "_online");
+    for (let i = 0; i < ids.length; i++) {
+      const st = hass && hass.states && hass.states[ids[i]];
+      const v = st && st.attributes && st.attributes.vin;
+      if (typeof v === "string" && v.length === 17) return v.toUpperCase();
+    }
+    return null;
+  }
+
   /* Stable, key-order-independent serialisation. Used only to tell whether a
      config we have been handed differs from the one we already hold: Home
      Assistant may echo the same config back with its keys reordered, so a
@@ -1036,16 +1078,7 @@
     _generation() {
       const cfg = String(this._car.generation || this._car.gen || "").toLowerCase();
       if (cfg) return cfg;
-      const yr = this._year();
-      if (!yr) return null;
-      const m = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
-      if (m.indexOf("modely") >= 0 || m === "y") return yr >= 2026 ? "juniper" : "classic";
-      if (m.indexOf("model3") >= 0 || m === "3") {
-        if (yr >= 2024) return "highland";
-        if (yr <= 2022) return "classic";
-        return null;                       /* 2023 is genuinely ambiguous */
-      }
-      return null;
+      return genFromYear(this._car.model, this._year());
     }
     /* the generation of the pack actually on screen, where we know it */
     _packGen() {
@@ -1280,21 +1313,40 @@
       // plain push. hacsfiles LAST: HACS only manages the JS file for
       // dashboard plugins and never updates or removes an images tree it once
       // laid down, so anything found there is likely stale.
-      const roots = ["/local/tesla-fleet-card/images/",
-                     "https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/",
-                     "/hacsfiles/tesla-fleet-homeassistant/images/"];
+      const REPO_ROOTS = ["https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/",
+                          "/hacsfiles/tesla-fleet-homeassistant/images/"];
+      const roots = ["/local/tesla-fleet-card/images/", REPO_ROOTS[0], REPO_ROOTS[1]];
       /* A generation-qualified pack wins if one exists, so dropping
          images/models/y-juniper/red/app into the repo or into /local is all it
          takes to fix a Juniper red Y. The unqualified path stays as the
          fallback, which keeps the current right-colour-wrong-bodywork
          behaviour for anyone without a matching pack. */
       const gen = this._generation();
-      const candidates = [];
+      let candidates = [];
       roots.forEach((root) => {
         if (paint && gen) candidates.push(root + "models/" + dir + "-" + gen + "/" + paint + "/app");
         if (paint) candidates.push(root + "models/" + dir + "/" + paint + "/app", root + dir + "/" + paint);
         candidates.push(root + dir, root + "models/" + dir + "/app");
       });
+      /* Refuse to borrow a pack we KNOW is the other generation's bodywork.
+         SHIPPED_GEN records the generation of every pack this repo ships, so
+         when the car's generation is known and mismatches, that pack is simply
+         a photograph of a different car and the no-pack panel is the honest
+         answer - it also names the folder somebody needs to fill. Only the
+         repo's own roots are judged this way: a pack of the user's own under
+         /local has no recorded generation, so it is left alone. Set
+         allow_other_generation on a car to have the old right-colour,
+         wrong-bodywork behaviour back. */
+      const wrongCar = (url) => {
+        if (car.allow_other_generation || !gen) return false;
+        for (let i = 0; i < REPO_ROOTS.length; i++) {
+          if (url.indexOf(REPO_ROOTS[i]) !== 0) continue;
+          const packGen = SHIPPED_GEN[url.slice(REPO_ROOTS[i].length)];
+          return !!packGen && packGen !== gen;
+        }
+        return false;
+      };
+      candidates = candidates.filter((u) => !wrongCar(u));
       const FILES7 = ["topdown.jpg", "topdown-plugged.jpg", "topdown-charging.jpg",
                       "side.jpg", "side-plugged.jpg", "side-charging.jpg", "climate.jpg"];
       const adopt = (base) => {           // record which of the 7 slots exist, then rebuild once
@@ -2871,9 +2923,50 @@
       this._rendered = true;
       this._render();
     }
-    set hass(hass) { this._hass = hass; }
+    set hass(hass) {
+      this._hass = hass;
+      /* The Generation field depends on the VIN, which arrives with hass and
+         may arrive after the first render. Re-render only when the answer
+         actually changes, and never while something is focused: re-rendering
+         under a focused input is exactly the issue #1 bug. */
+      if (!this._rendered) return;
+      const sig = this._ambSig();
+      if (sig === this._ambLast) return;
+      if (this.shadowRoot && this.shadowRoot.activeElement) return;
+      this._render();
+    }
+    /* Only ask when the card genuinely cannot tell. The VIN gives the model
+       year for every car, and the year settles the generation in every case but
+       one: a 2023 Model 3. So this field appears on that car and no other,
+       rather than adding a third dropdown to five cars that do not need one.
+       No VIN yet means no question either - the card is not stuck, it just has
+       not been told the year, and `generation` in YAML still overrides. */
+    _ambiguous(car) {
+      if (!this._hass || !car) return false;
+      const yr = yearFromVin(vinForPrefix(this._hass, car.prefix));
+      return !!yr && !genFromYear(car.model, yr);
+    }
+    /* Show the field where generation is actually in play: a car the VIN
+       cannot decide, or a car somebody has already answered for. The second
+       half matters - without it, picking a generation makes the car no longer
+       ambiguous and the dropdown you just used disappears from under you. It
+       also gives a way to clear a redundant key back to "-". */
+    _showGen(car) {
+      if (!car) return false;
+      return !!(car.generation || car.gen) || this._ambiguous(car);
+    }
+    _ambSig() {
+      const cars = (this._config && this._config.cars) || [];
+      return cars.map((c) => (this._showGen(c) ? "1" : "0")).join("");
+    }
+    _genOptions(car) {
+      const m = String(car.model || "").toLowerCase().replace(/\s+/g, "");
+      const isY = m.indexOf("modely") >= 0 || m === "y";
+      return ["", isY ? "juniper" : "highland", "classic"];
+    }
     _render() {
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+      this._ambLast = this._ambSig();
       let html = `
         <style>
           .car { border:1px solid var(--divider-color,#444); border-radius:8px; padding:8px 10px; margin:8px 0; }
@@ -2894,6 +2987,12 @@
             ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "-"}</option>`).join("")}
           </select></label>
           <label>Entity prefix <input data-i="${i}" data-k="prefix" value="${c.prefix || ""}" placeholder="e.g. buddy_"></label>
+          ${this._showGen(c) ? `<label>Generation <select data-i="${i}" data-k="generation">
+            ${this._genOptions(c).map((g) => `<option value="${g}" ${((c.generation || "") === g) ? "selected" : ""}>${g ? esc(GEN_LABEL[g] || g) : "-"}</option>`).join("")}
+          </select></label>
+          <div class="hint">${this._ambiguous(c)
+            ? "This is the one case the VIN cannot settle: a 2023 Model&nbsp;3 could be either body, because Highland arrived in January 2024. Pick one and the card serves the right photos instead of guessing."
+            : "The card can work this out from the VIN, so this is only here because your config sets it. Choose &quot;-&quot; to let it decide."}</div>` : ""}
           <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey). The integration is auto-detected from the prefix, and a missing trailing underscore is corrected for you. Advanced options - custom images, tap anchors, integration override, entity overrides - live in YAML (Show code editor); see the README.</div>
         </div>`;
       });
@@ -2912,6 +3011,9 @@
           /* `color` is no longer read by the card; strip any left over from an
              older config so it does not sit there implying it still does. */
           if (inp.dataset.k === "paint") delete car.color;
+          /* "-" means "work it out", which is the absence of the key rather
+             than an empty string sitting in the YAML implying otherwise. */
+          if (inp.dataset.k === "generation" && !inp.value) delete car.generation;
           this._emit();
         })
       );
