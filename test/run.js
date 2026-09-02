@@ -224,6 +224,25 @@ function customStates(p) {
     R.drive_motion_off = driveState(driveCard("D", 42, { drive_motion: "off" }));
     /* somebody else's photo gets still wheels: a wrong ellipse is a wobble */
     R.drive_unmeasured_pack = driveState(driveCard("D", 42, { wheels: null })).spinners;
+    /* the demo switch must be inert without its helper, and must be gone
+       before release. If this test starts failing because DEMO_DRIVE no
+       longer exists, delete the test - that is the intended end state. */
+    R.demo_switch_inert = driveState(driveCard("P", 0)).shown;
+    (() => {
+      const st = customStates("t_");
+      st["binary_sensor.t_online"].state = "on";
+      st["sensor.t_shift_state"] = { entity_id: "sensor.t_shift_state", state: "P", attributes: {} };
+      st["input_boolean.tesla_card_drive_demo"] =
+        { entity_id: "input_boolean.tesla_card_drive_demo", state: "on", attributes: {} };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [{ name: "T", model: "Model Y",
+        paint: "red", prefix: "t_", image_side: "side.jpg" }] });
+      c.hass = { states: st };
+      const o = c.shadowRoot.getElementById("driveOvl");
+      R.demo_switch_on = o ? o.style.display !== "none" : null;
+      R.demo_switch_sub = c.shadowRoot.getElementById("sub").textContent;
+    })();
     R.drive_cycle_override = driveState(driveCard("D", 42,
       { road: { angle: -21.9, cycle: 2.4, lines: [[93.3, 2.2]] } })).cycle;
     /* miles stay miles */
@@ -373,6 +392,9 @@ function customStates(p) {
   check("drive_motion: off draws no road", r.drive_motion_off.lines, 0);
   check("drive_motion: off stills wheels", r.drive_motion_off.spinners, 0);
   check("an unmeasured pack gets none",    r.drive_unmeasured_pack, 0);
+  check("the demo switch is inert by default", r.demo_switch_inert, false);
+  check("the demo switch forces driving",  r.demo_switch_on, true);
+  check("the demo speed is invented",      r.demo_switch_sub, "68 km/h");
 
   console.log("\nthe running mode on the home view");
   check("nothing added when the mode is normal", r.home_normal, "Parked");

@@ -8,7 +8,24 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.4-test.1";
+  const CARD_VERSION = "1.1.4-test.2";
+
+  /* ---- DEMO SWITCH: REMOVE BEFORE ANY RELEASE ------------------------
+     Nick asked to see the driving view on his own dashboard without
+     waiting to be in a car. While this input_boolean is on, every car
+     renders as if it were driving. It is deliberately a helper entity
+     rather than a config key so that looking at it costs no dashboard
+     edit and turning it off is one tap.
+
+     The speed shown while it is on is INVENTED, because a parked car
+     reports zero. That is the one thing here that is not real data,
+     which is reason enough that this must not reach a release: a card
+     that can be told to lie about whether a car is moving has no
+     business in anybody else's install. The test suite asserts it is
+     inert when the helper is absent, but the only correct fix is to
+     delete this block and the two references to it. */
+  const DEMO_DRIVE = "input_boolean.tesla_card_drive_demo";
+  const DEMO_SPEED_MPH = 42;
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -970,6 +987,9 @@
       const t = this._st("location");
       const raw = t && t.attributes ? t.attributes.speed : null;
       if (raw === null || raw === undefined || raw === "") return null;
+      return this._speedFrom(raw);
+    }
+    _speedFrom(raw) {
       const mph = Number(raw);
       if (!isFinite(mph) || mph <= 0) return null;
       const unit = String(this._unit("range", "km")).toLowerCase();
@@ -2171,6 +2191,10 @@
       else if (asleep) { status = "Asleep"; durKey = "asleep"; }
       else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
+      /* DEMO SWITCH - see DEMO_DRIVE above. Remove before release. */
+      const demo = !!(this._hass && this._hass.states && this._hass.states[DEMO_DRIVE] &&
+                      this._hass.states[DEMO_DRIVE].state === "on");
+      if (demo) { status = "Driving"; durKey = "shift"; }
       const moving = status === "Driving";
       const durS = this._st(durKey);
       const dur = durS ? relDur(durS.last_changed) : "";
@@ -2196,7 +2220,7 @@
          sensor is using. Speed was zero on every car available while this
          was written, so the conversion is reasoned, not measured - the one
          number on this screen I have not seen the car produce. */
-      const sp = this._speed();
+      const sp = this._speed() || (demo ? this._speedFrom(DEMO_SPEED_MPH) : null);
       if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
       const dOvl = q("driveOvl");
