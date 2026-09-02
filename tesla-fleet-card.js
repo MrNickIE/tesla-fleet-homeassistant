@@ -123,6 +123,7 @@
      rather than a dead end. */
   const PACKS_SHIPPED = [
     { model: "Model Y", paint: "red", dir: "models/y/red/app" },
+    { model: "Model Y", paint: "white", dir: "models/y/white/app" },
     { model: "Model 3", paint: "grey", dir: "models/3/grey/app" }
   ];
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
