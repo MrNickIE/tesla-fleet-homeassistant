@@ -213,8 +213,13 @@ function customStates(p) {
       const st = customStates("t_");
       st["binary_sensor.t_online"].state = "on";
       st["sensor.t_shift_state"] = { entity_id: "sensor.t_shift_state", state: shift, attributes: {} };
+      /* speed === "omit" leaves the key out altogether, which is a different
+         thing from a null: tesla_custom reports null on a parked car, so null
+         means stopped and a missing key means the integration never says. */
+      const at = { latitude: 1, longitude: 2 };
+      if (speed !== "omit") at.speed = speed;
       st["device_tracker.t_location_tracker"] = { entity_id: "device_tracker.t_location_tracker",
-        state: "not_home", attributes: { latitude: 1, longitude: 2, speed: speed } };
+        state: "not_home", attributes: at };
       const c = document.createElement("tesla-fleet-card");
       document.body.appendChild(c);
       c.setConfig({ type: "custom:tesla-fleet-card", cars: [Object.assign(
@@ -272,11 +277,19 @@ function customStates(p) {
     /* a car whose speed cannot be read must NOT freeze: it falls back to
        moving, or the road would strand mid-slide on any integration that
        does not report a speed at all */
-    R.tier_no_speed = driveState(driveCard("D", null));
-    R.tier_slow = driveState(driveCard("D", 12)).cycle;   /* 12 km/h */
-    R.tier_fast = driveState(driveCard("D", 56)).cycle;   /* 56 km/h, Patsy's */
-    R.tier_slow_wheel = driveState(driveCard("D", 12)).wheelDur;
-    R.tier_fast_wheel = driveState(driveCard("D", 56)).wheelDur;
+    R.tier_no_speed = driveState(driveCard("D", "omit"));
+    /* the road speed is proportional to the car's: doubling one halves the
+       other. Two tiers gave 40 and 100 km/h the same animation, which is what
+       made 40 read as half its real speed. */
+    R.cyc_20 = driveState(driveCard("D", 20)).cycle;
+    R.cyc_40 = driveState(driveCard("D", 40)).cycle;
+    R.cyc_80 = driveState(driveCard("D", 80)).cycle;
+    R.cyc_ref = driveState(driveCard("D", 40)).cycle;   /* refKph -> refCycle */
+    R.cyc_crawl = driveState(driveCard("D", 2)).cycle;  /* clamped by maxCycle */
+    R.cyc_flat_out = driveState(driveCard("D", 250)).cycle; /* by minCycle */
+    R.tier_slow = R.cyc_20; R.tier_fast = R.cyc_80;
+    R.tier_slow_wheel = driveState(driveCard("D", 20)).wheelDur;
+    R.tier_fast_wheel = driveState(driveCard("D", 80)).wheelDur;
     /* A wheel that does not roll with the road under it is the first thing
        the eye catches, and it caught Nick's. The rotation period must be
        DERIVED from the road, so the ratio between them cannot depend on the
@@ -297,7 +310,7 @@ function customStates(p) {
       const box = mkCard([{ name: "Z", model: "Model Y", paint: "red", prefix: "t_",
         image_side: "side.jpg" }], customStates("t_"))._carBox("side.jpg", "Rest");
       const cw = box[2] - box[0];
-      const roadSpeed = Math.max(8, cw * 0.45) / 0.85;
+      const roadSpeed = Math.max(8, cw * 0.45) / parseFloat(R.tier_fast);
       R.wheel_expected_fast = +(perRev / roadSpeed).toFixed(2);
     })();
     /* the demo switch must be inert without its helper, and must be gone
@@ -320,7 +333,7 @@ function customStates(p) {
       R.demo_switch_sub = c.shadowRoot.getElementById("sub").textContent;
     })();
     R.drive_cycle_override = driveState(driveCard("D", 42,
-      { road: { angle: -21.9, cycle: 2.4, lines: [[93.3, 2.2]] } })).cycle;
+      { road: { angle: -21.9, cycle: 0.86, lines: [[93.3, 2.2]] } })).cycle;
     /* miles stay miles */
     (() => {
       const st = customStates("t_");
@@ -476,13 +489,20 @@ function customStates(p) {
   check("and a stopped wheel is sharp, not blurred",
     r.tier_still.clipGeom.length, 2);
   check("unknown speed still animates",    r.tier_no_speed.slides, 1);
-  check("under 20km/h the road is calm",   r.tier_slow, "1.7s");
-  check("over 20km/h the road doubles",    r.tier_fast, "0.85s");
-  check("the wheel/road ratio is tier-free",
-    r.wheel_road_ratio[0], r.wheel_road_ratio[1]);
+  check("the road tracks the speed",       r.cyc_ref, "0.43s");
+  check("double the speed, half the period",
+    [r.cyc_20, r.cyc_40, r.cyc_80], ["0.86s", "0.43s", "0.22s"]);
+  check("a crawl is clamped, not stopped",  r.cyc_crawl, "3.4s");
+  check("flat out is clamped, not strobing", r.cyc_flat_out, "0.12s");
+  /* within 1%: both the cycle and the duration are rounded before they reach
+     the DOM, so at a short cycle the quantisation shows up in the ratio. 1%
+     still catches the fault this guards against, which was a factor of 1.76. */
+  check("the wheel/road ratio is speed-free",
+    Math.abs(r.wheel_road_ratio[0] - r.wheel_road_ratio[1]) / r.wheel_road_ratio[0] < 0.01, true);
   check("and matches the rolling geometry",
     Math.abs(parseFloat(r.tier_fast_wheel) - r.wheel_expected_fast) < 0.06, true);
-  check("a pack can set its own cycle",    r.drive_cycle_override, "1.2s");
+  /* a 0.86 reference at 40 km/h, driven at 42, so 0.86 * 40/42 */
+  check("a pack can set its own reference", r.drive_cycle_override, "0.82s");
   check("speed replaces the parked timer", r.drive_drive.sub, "42 km/h");
   /* the field is in the car's display units, proven with the odometer, so
      nothing is converted; only the label follows the range sensor */

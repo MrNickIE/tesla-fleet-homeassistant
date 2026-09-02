@@ -133,7 +133,7 @@
     cop: "climate.{p}cabin_overheat_protection",
   };
 
-  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
+  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1 };
   const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
@@ -172,16 +172,30 @@
        screen's size that reads as frantic, which is what Nick called it. At
        1.7s a marking passes about every second and a half and it settles
        down. A road spec can override with its own cycle. */
-    cycle: 1.7,            // seconds per dash period, slow
-    /* The app scales the road with the car. Nick, watching the demo: "in the
-       app, this is like the car is driving slow ... below 20km. Above this it
-       should be double the speed on the animations". That agrees with the one
-       measurement there is: the 0.833s cycle came off a frame whose status
-       read 67 KM/H, and half of 1.7 is 0.85. Two tiers rather than a curve,
-       because one video at one speed cannot tell me the shape of a curve;
-       record the app at 30 and 50 and this becomes a table. */
-    fastCycle: 0.85,       // seconds per dash period, above the threshold
-    fastAbove: 20,         // km/h at which the road doubles its speed
+    /* THE ROAD SPEED IS PROPORTIONAL TO THE CAR'S, and refCycle is the one
+       number that sets it. Two tiers came first, from Nick's "below 20km is
+       slow, above this it should be double", and two tiers were wrong: at 40
+       and at 100 km/h you got exactly the same animation, so 40 read as half
+       its real speed. Nick, watching Rachel: "Rachel is doing about 40kmph
+       now and it looks about 20Kph in the animation".
+
+       So: one dash period per refCycle seconds at refKph, scaled inversely
+       with speed. Doubling the speed halves the period, all the way up and
+       down, with a floor so a motorway does not strobe and a ceiling so a
+       crawl does not look stopped.
+
+       refCycle is deliberately the ONLY calibration number, and the card
+       config can scale it live with drive_speed, so tuning this by eye needs
+       a dashboard edit rather than a new build. */
+    refKph: 40,            // the speed refCycle is calibrated at
+    refCycle: 0.43,        // seconds per dash period at refKph  <-- THE KNOB
+    /* The floor was 0.26 and the test suite caught that as a real fault, not
+       a wrong expectation: 80 km/h already hit it, so everything above about
+       66 km/h flattened to one speed and reproduced the exact complaint this
+       change exists to fix. At 0.12 a dash period is still seven frames at
+       60fps, and proportionality survives to about 143 km/h. */
+    minCycle: 0.12,        // floor: below this the dashes strobe
+    maxCycle: 3.4,         // ceiling: a crawl still shows movement
     dash: 1 / 3,           // fraction of the period that is painted
     colour: "#2b2a2b",
     /* The app's dash period is 0.86 car widths, which in its wide framing
@@ -1003,11 +1017,17 @@
        any integration that does not report speed. */
     _speedKph() {
       const t = this._st("location");
-      let raw = t && t.attributes ? t.attributes.speed : null;
+      const at = t && t.attributes;
+      let raw = at && ("speed" in at) ? at.speed : undefined;
       if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED;
-      if (raw === null || raw === undefined || raw === "") return null;
+      /* tesla_custom reports speed as NULL on a parked car, not 0, checked on
+         Emmanuel the moment he parked. So a null that is present means "not
+         moving"; only a missing key means "this integration does not tell us",
+         and that falls back to animating rather than freezing. */
+      if (raw === undefined) return null;
+      if (raw === null || raw === "") return 0;
       const v = Number(raw);
-      if (!isFinite(v) || v < 0) return null;
+      if (!isFinite(v) || v < 0) return 0;
       return this._imperial() ? v * 1.609344 : v;
     }
     _demoDrive() {
@@ -2372,21 +2392,28 @@
            It keeps its road and its wheels and loses the motion, because a
            sliding road under a stationary car is the thing Nick spotted:
            "At 0, the animation should stop." */
+        const dsrc = dOvl.getAttribute("data-src") || "";
+        const rd = this._road(dsrc);
         const kph = this._speedKph();
-        const tier = !moving ? "off"
-          : kph === 0 ? "still"
-          : (kph === null ? DRIVE.fastAbove : kph) >= DRIVE.fastAbove ? "fast" : "slow";
+        const scale = Number(this._config && this._config.drive_speed) || 1;
+        /* a pack may carry its own reference cycle; drive_speed scales it */
+        const ref = (rd && rd.cycle > 0 ? rd.cycle : DRIVE.refCycle) /
+                    (scale > 0 ? scale : 1);
+        let cyc = 0;
+        if (moving && kph !== 0) {
+          const v = kph === null ? DRIVE.refKph : kph;   /* speed not reported */
+          cyc = ref * DRIVE.refKph / v;
+          cyc = Math.min(DRIVE.maxCycle, Math.max(DRIVE.minCycle, cyc));
+          cyc = Math.round(cyc * 100) / 100;
+        }
+        /* the tier key is the cycle itself, so the overlay is rebuilt when
+           the speed actually changes the animation and not otherwise */
+        const tier = !moving ? "off" : cyc > 0 ? "c" + cyc.toFixed(2) : "still";
         if (tier !== this._driveTier) {
           this._driveTier = tier;
           if (tier === "off") dOvl.innerHTML = "";
           else {
-            const dsrc = dOvl.getAttribute("data-src") || "";
             const dsfx = dOvl.getAttribute("data-sfx") || "Rest";
-            const rd = this._road(dsrc);
-            const own = rd && rd.cycle;
-            const cyc = tier === "still" ? 0
-              : tier === "fast" ? (own ? own / 2 : DRIVE.fastCycle)
-              : (own || DRIVE.cycle);
             const box = this._carBox(dsrc, dsfx);
             const cwv = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : 233 * 0.71;
             const wh = this._wheels(dsrc);
