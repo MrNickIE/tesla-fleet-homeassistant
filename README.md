@@ -144,10 +144,29 @@ Per car:
 | `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
 | `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
 | `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
-| `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. Tesla Custom reports the same preset and fan lists for every car, so the card cannot tell a Bioweapon Defense car from one without it. |
+| `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. |
+| `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
 bar), `accent`.
+
+### Bioweapon Defense Mode
+
+Tesla Custom reports the same `fan_modes` list for every car, so it cannot be
+used to tell a car that has Bioweapon Defense Mode from one that does not. The
+card falls back to the model instead: the mode needs a HEPA filter, which Model
+S, X and Y carry and Model 3 does not, so the button is hidden on a Model 3.
+
+The year matters too, and the card cannot see it. Model Y was built without the
+filter until Tesla added it to the production line in June 2021, and Model S and
+X only got it from 2016. Both are retrofittable. So:
+
+- a 2020 or early-2021 Model Y wants `hide_climate: [bio]`
+- a pre-2016 Model S or X wants `hide_climate: [bio]`
+- any car with a retrofitted filter wants `show_climate: [bio]`
+
+Nothing in the integration exposes a build year or a VIN today, which is why
+this is config rather than detection.
 
 ## Updating
 

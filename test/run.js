@@ -172,6 +172,39 @@ function customStates(p) {
     R.wheel_auto  = glyph(climCard({ "select.t_heated_steering_wheel": "Auto", "switch.t_heated_steering": "off" }), "wheelHeat", 2);
     R.wheel_switchOnly = glyph(climCard({ "switch.t_heated_steering": "on" }), "wheelHeat", 2);
 
+    /* ---- Bioweapon Defense: a model test, not a capability test --------
+       tesla_custom reports fan_modes ["off","bioweapon"] for every car,
+       checked on four of Nick's. The mode needs a HEPA filter, which Model
+       S/X/Y carry and Model 3 does not. */
+    const climModel = (model, extra) => {
+      const st = customStates("t_");
+      st["climate.t_hvac_climate_system"] = { entity_id: "climate.t_hvac_climate_system",
+        state: "heat_cool", attributes: { preset_mode: "normal",
+          preset_modes: ["normal", "defrost", "keep", "dog", "camp"],
+          fan_mode: "off", fan_modes: ["off", "bioweapon"],
+          current_temperature: 20, temperature: 20 } };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [Object.assign(
+        { name: "T", model: model, paint: "grey", prefix: "t_" }, extra || {})] });
+      c.hass = { states: st };
+      c._view = "clim"; c._built = false; c.hass = { states: st };
+      return c;
+    };
+    const hasBio = (c) => !!c.shadowRoot.getElementById("btnBio");
+    R.bio_on_model_y = hasBio(climModel("Model Y"));
+    R.bio_off_model_3 = hasBio(climModel("Model 3"));
+    R.bio_off_model_3_spaced = hasBio(climModel("model3"));
+    R.bio_on_model_x = hasBio(climModel("Model X"));
+    /* a retrofitted Model 3 can be told it does have one, and a 2020 Model Y
+       that predates the factory HEPA can be told it does not */
+    R.bio_forced_on = hasBio(climModel("Model 3", { show_climate: ["bio"] }));
+    R.bio_forced_off = hasBio(climModel("Model Y", { hide_climate: ["bio"] }));
+    /* every mode button centred, like Defrost Car above them */
+    R.mode_buttons_centred = Array.prototype.map.call(
+      climModel("Model Y").shadowRoot.querySelectorAll(".defrostBtn"),
+      (b) => getComputedStyle(b).textAlign);
+
     /* ---- the driving view ----------------------------------------------
        The card swaps to a moving road and a speed readout when the car is in
        gear. Geometry was measured off a screen recording of the app rather
@@ -381,6 +414,16 @@ function customStates(p) {
   check("wheel Auto lights no waves",             r.wheel_auto.lit, 0);
   check("wheel Auto label is grey",               r.wheel_auto.autoCol, "#90908e");
   check("wheel falls back to the switch",         r.wheel_switchOnly.lit, 2);
+
+  console.log("\nBioweapon Defense needs a HEPA filter");
+  check("Model Y is offered it",                  r.bio_on_model_y, true);
+  check("Model X is offered it",                  r.bio_on_model_x, true);
+  check("Model 3 is NOT",                         r.bio_off_model_3, false);
+  check("however the model is spelled",           r.bio_off_model_3_spaced, false);
+  check("show_climate can force it on",           r.bio_forced_on, true);
+  check("hide_climate can force it off",          r.bio_forced_off, false);
+  check("every mode button is centred",
+    r.mode_buttons_centred.filter((a) => a !== "center"), []);
 
   console.log("\nthe driving view");
   check("parked shows no road",            r.drive_parked.shown, false);

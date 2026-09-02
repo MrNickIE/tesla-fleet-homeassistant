@@ -134,7 +134,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -1308,7 +1308,10 @@
   .tapa { cursor:pointer; }
   /* mist animation is SMIL (in the SVG markup) - CSS transforms on filtered
      SVG elements don't animate on iOS WebKit (HA companion app) */
-  .climX { margin-top:8px; text-align:left; padding-left:14px; }
+  /* Centred, like Defrost Car directly above them. They were left-aligned
+     with a padding-left, which put four buttons in one column under two
+     different alignments. */
+  .climX { margin-top:8px; }
   .climX.on { color:#4fa3ff; }
   .copWrap { margin-top:14px; }
   .copLbl { font-size:12.5px; color:#9b9b9b; margin-bottom:7px; }
@@ -2112,13 +2115,28 @@
       const presets = (cs && cs.attributes.preset_modes) || [];
       const has = (arr, v) => arr.some((o) => String(o).toLowerCase() === v);
       /* tesla_custom reports the SAME preset_modes and fan_modes list for every
-         car, so these lists are not capability detection. Buddy is offered
-         Bioweapon Defense and has no such thing. There is no reliable signal
-         to test, so a car can opt out by name: hide_climate: [bio, camp, pet]. */
+         car, so these lists are not capability detection. Checked again on
+         four of Nick's cars: all four report fan_modes ["off","bioweapon"],
+         including the Model 3s that plainly do not have it.
+
+         So Bioweapon falls back to the MODEL. It needs a HEPA filter, which
+         Model S, X and Y carry and Model 3 does not - Tesla could not fit the
+         larger filter in a Model 3. Verified against Tesla reference material
+         rather than recalled, and it matches what Nick found on Buddy, a
+         Model 3 Highland: the button was there and the feature was not.
+
+         A model string is a weaker signal than a capability flag, so both
+         directions are overridable: hide_climate: [bio] takes it away from a
+         car that reports one, show_climate: [bio] gives it to a Model 3 with
+         a retrofitted filter. */
       const hidden = (this._car.hide_climate || []).map((x) => String(x).toLowerCase());
-      const show = (k) => hidden.indexOf(k) < 0;
+      const shown = (this._car.show_climate || []).map((x) => String(x).toLowerCase());
+      const show = (k) => shown.indexOf(k) >= 0 || hidden.indexOf(k) < 0;
+      const model = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
+      const hepa = shown.indexOf("bio") >= 0 ||
+        !(model.indexOf("model3") >= 0 || model === "3" || model.indexOf("m3") === 0);
       let html = "";
-      if (has(fans, "bioweapon") && show("bio"))
+      if (has(fans, "bioweapon") && show("bio") && hepa)
         html += `<button class="defrostBtn climX" id="btnBio">${climIcon(`<path d="${ICONS.shield}"/>`)}Bioweapon Defense Mode</button>`;
       if (has(presets, "camp") && show("camp"))
         html += `<button class="defrostBtn climX" id="btnCamp">${climIcon(CLIM_GLYPH.tent)}Camp Mode</button>`;
