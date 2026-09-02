@@ -287,8 +287,31 @@
      motion blur, which is what a camera sees and which also softens what
      is left of the resampling. */
   const WHEEL = {
-    dur: 0.9,        // seconds per revolution, slow
-    fastDur: 0.45,   // seconds per revolution above DRIVE.fastAbove
+    /* No fixed duration. A wheel that does not roll with the road it is on is
+       the first thing the eye picks up, and mine did not: Nick, watching Patsy
+       at speed, "the wheel speed is also slighly faster than the road speed I
+       think". Measured, it was 1.76 times the road, so the rotation period is
+       now DERIVED from the road rather than being a second free number.
+
+       One revolution advances the contact patch by the wheel's circumference,
+       and in the image that distance is 2*pi times the ellipse's SEMI-DIAMETER
+       ALONG THE DIRECTION OF TRAVEL. That is exact, and it is exact for a
+       pleasing reason: the contact point is where the rim's tangent runs
+       parallel to the road, the tangent at a point of an ellipse is parallel
+       to its conjugate diameter, and the speed there works out to the length
+       of the semi-diameter in the direction of travel.
+
+       Two wrong answers were tried first, and both were plausible. Taking the
+       minor semi-axis b is 12% low, because the minor axis is not quite the
+       travel direction. Taking the rim speed at the ellipse's LOWEST point is
+       worse and misleading: the lowest point of any curve has a horizontal
+       tangent, so that always claims the wheel is running horizontally, and
+       comparing it against a road at -21.9 degrees looked like a 158 degree
+       error that was really the wrong point.
+
+       Set that against the road's own speed, one dash period per cycle, and
+       the period falls out. It stays right at both tiers and on any pack. */
+    minDur: 0.18,    // a floor, so a tiny wheel cannot strobe
     clip: 0.74,      // fraction of the fitted ellipse that rotates
     copies: 3,       // stacked copies making the motion blur
     spread: 18       // degrees between the first and last copy
@@ -371,8 +394,26 @@
       `<g clip-path="url(#dwC${id})">${layers}</g>`;
   }
 
+  /* seconds per revolution such that the contact patch keeps pace with the
+     road it is drawn on */
+  function wheelPeriod(wheels, cw, cycle, roadAngle) {
+    const f = wheels && wheels.front;
+    if (!f || f.length < 5 || !(cycle > 0)) return null;
+    const a = f[2], b = f[3];
+    if (!(a > 0 && b > 0)) return null;
+    /* the ellipse's semi-diameter along the direction of travel */
+    const al = ((roadAngle || 0) - f[4]) * Math.PI / 180;
+    const ca = Math.cos(al) / a, sa = Math.sin(al) / b;
+    const q = ca * ca + sa * sa;
+    if (!(q > 0)) return null;
+    const perRev = 2 * Math.PI / Math.sqrt(q);
+    const roadSpeed = Math.max(8, cw * DRIVE.period) / cycle;
+    if (!(roadSpeed > 0)) return null;
+    return Math.max(WHEEL.minDur, perRev / roadSpeed);
+  }
+
   function driveWheels(wheels, src, dur) {
-    if (!wheels || !wheels.front || !wheels.rear || !src) return "";
+    if (!wheels || !wheels.front || !wheels.rear || !src || !(dur > 0)) return "";
     const lift = wheels.lift || 1;
     return `<defs>
       <image id="dwImg" href="${src}" x="0" y="0" width="233" height="108" preserveAspectRatio="none"/>
@@ -2302,9 +2343,13 @@
             const rd = this._road(dsrc);
             const own = rd && rd.cycle;
             const cyc = fast ? (own ? own / 2 : DRIVE.fastCycle) : (own || DRIVE.cycle);
+            const box = this._carBox(dsrc, dsfx);
+            const cwv = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : 233 * 0.71;
+            const wh = this._wheels(dsrc);
+            const wdur = wheelPeriod(wh, cwv, cyc, rd && rd.angle);
             dOvl.innerHTML =
-              driveRoad(233, 108, this._carBox(dsrc, dsfx), rd, +cyc.toFixed(3)) +
-              driveWheels(this._wheels(dsrc), dsrc, fast ? WHEEL.fastDur : WHEEL.dur);
+              driveRoad(233, 108, box, rd, +cyc.toFixed(3)) +
+              driveWheels(wh, dsrc, wdur ? +wdur.toFixed(3) : 0);
           }
         }
         dOvl.style.display = moving ? "" : "none";

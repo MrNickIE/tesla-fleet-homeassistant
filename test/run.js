@@ -271,6 +271,29 @@ function customStates(p) {
     R.tier_fast = driveState(driveCard("D", 42)).cycle;   /* 42mph = 68 km/h  */
     R.tier_slow_wheel = driveState(driveCard("D", 6)).wheelDur;
     R.tier_fast_wheel = driveState(driveCard("D", 42)).wheelDur;
+    /* A wheel that does not roll with the road under it is the first thing
+       the eye catches, and it caught Nick's. The rotation period must be
+       DERIVED from the road, so the ratio between them cannot depend on the
+       tier - that is what a pair of independent constants got wrong. */
+    R.wheel_road_ratio = ["tier_slow", "tier_fast"].map((k, i) => {
+      const cyc = parseFloat(i ? R.tier_fast : R.tier_slow);
+      const wd = parseFloat(i ? R.tier_fast_wheel : R.tier_slow_wheel);
+      return +(wd / cyc).toFixed(3);
+    });
+    /* and independently: one revolution advances the contact patch by 2*pi
+       times the ellipse's semi-diameter along the direction of travel */
+    (() => {
+      const a = 15.65, b = 10.99, phi = 109.3, ang = -21.9;
+      const al = (ang - phi) * Math.PI / 180;
+      const ca = Math.cos(al) / a, sa = Math.sin(al) / b;
+      const semi = 1 / Math.sqrt(ca * ca + sa * sa);
+      const perRev = 2 * Math.PI * semi;
+      const box = mkCard([{ name: "Z", model: "Model Y", paint: "red", prefix: "t_",
+        image_side: "side.jpg" }], customStates("t_"))._carBox("side.jpg", "Rest");
+      const cw = box[2] - box[0];
+      const roadSpeed = Math.max(8, cw * 0.45) / 0.85;
+      R.wheel_expected_fast = +(perRev / roadSpeed).toFixed(2);
+    })();
     /* the demo switch must be inert without its helper, and must be gone
        before release. If this test starts failing because DEMO_DRIVE no
        longer exists, delete the test - that is the intended end state. */
@@ -443,7 +466,10 @@ function customStates(p) {
     r.drive_drive.clipGeom[0][0].split(" ")[0], r.drive_drive.clipGeom[1][0].split(" ")[0]);
   check("under 20km/h the road is calm",   r.tier_slow, "1.7s");
   check("over 20km/h the road doubles",    r.tier_fast, "0.85s");
-  check("the wheels follow the road",      [r.tier_slow_wheel, r.tier_fast_wheel], ["0.9s", "0.45s"]);
+  check("the wheel/road ratio is tier-free",
+    r.wheel_road_ratio[0], r.wheel_road_ratio[1]);
+  check("and matches the rolling geometry",
+    Math.abs(parseFloat(r.tier_fast_wheel) - r.wheel_expected_fast) < 0.06, true);
   check("a pack can set its own cycle",    r.drive_cycle_override, "1.2s");
   check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
   check("miles stay miles",                r.drive_speed_imperial, "42 mph");
