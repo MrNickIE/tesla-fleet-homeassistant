@@ -421,6 +421,45 @@ function customStates(p) {
     R.home_dog     = homeSub("dog");
     R.home_defrost = homeSub("defrost");
 
+    /* ---- the map view -------------------------------------------------- */
+    /* HA's Map dashboard is a strategy dashboard, so nothing can deep-link
+       into it centred on one car. The card therefore builds HA's OWN map card
+       with a single entity and a zoom. What matters in a test is the CONFIG we
+       hand HA, because that is the whole feature, plus every fallback path:
+       loadCardHelpers is semi-public and a car can have no coordinates. */
+    const mapCar = (extra, at, cardCfg) => {
+      const st = customStates("m_");
+      st["binary_sensor.m_online"] = { entity_id: "binary_sensor.m_online",
+        state: "on", attributes: {} };
+      st["device_tracker.m_location_tracker"] = { entity_id: "device_tracker.m_location_tracker",
+        state: "not_home", attributes: at === "none" ? {} : (at || { latitude: 53.3, longitude: -6.2 }) };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig(Object.assign({ type: "custom:tesla-fleet-card", cars: [Object.assign(
+        { name: "M", model: "Model 3", paint: "grey", prefix: "m_" }, extra || {})] }, cardCfg || {}));
+      c.hass = { states: st };
+      return c;
+    };
+    const tapLoc = (c) => c.shadowRoot.getElementById("headLoc").click();
+
+    /* no coordinates is a sentence, not an empty grey box */
+    (() => {
+      const c = mapCar(null, "none");
+      tapLoc(c);
+      const n = c.shadowRoot.querySelector(".mapNote");
+      R.map_no_coords = n ? n.textContent.indexOf("not reporting coordinates") >= 0 : null;
+    })();
+
+    /* the old behaviour is still available, and must NOT change view */
+    (() => {
+      const c = mapCar({ location_tap: "more-info" });
+      let fired = null;
+      c.addEventListener("hass-more-info", (e) => { fired = e.detail.entityId; });
+      tapLoc(c);
+      R.map_optout_event = fired;
+      R.map_optout_view = c._view;
+    })();
+
     /* ---- the editor ---------------------------------------------------- */
     const ed = document.createElement("tesla-fleet-card-editor");
     document.body.appendChild(ed);
@@ -626,6 +665,65 @@ function customStates(p) {
     })();
 
     window.fetch = realFetch;
+
+    /* THE MAP CONFIG. This lives in the async block because loadCardHelpers()
+       returns a promise: the same fixture in the synchronous block silently
+       recorded undefined for every assertion, which reads as five broken
+       features rather than one un-awaited promise. */
+    const realHelpers = window.loadCardHelpers;
+    let seen = null, fed = 0;
+    window.loadCardHelpers = () => Promise.resolve({
+      createCardElement: (cfg) => {
+        seen = cfg;
+        const el = document.createElement("div");
+        el.className = "fakeMap";
+        Object.defineProperty(el, "hass", { set() { fed++; }, configurable: true });
+        return el;
+      }
+    });
+    const mc = document.createElement("tesla-fleet-card");
+    document.body.appendChild(mc);
+    mc.setConfig({ type: "custom:tesla-fleet-card", map_zoom: 17, cars: [
+      { name: "M", model: "Model 3", paint: "grey", prefix: "m_" }] });
+    const mst = customStates("m_");
+    mst["binary_sensor.m_online"] = { entity_id: "binary_sensor.m_online", state: "on", attributes: {} };
+    mst["device_tracker.m_location_tracker"] = { entity_id: "device_tracker.m_location_tracker",
+      state: "not_home", attributes: { latitude: 53.3, longitude: -6.2 } };
+    mc.hass = { states: mst };
+    mc.shadowRoot.getElementById("headLoc").click();
+    R.map_view_opened = mc._view;
+    await new Promise((z) => setTimeout(z, 80));
+    R.map_cfg = seen;
+    R.map_mounted = !!mc.shadowRoot.querySelector(".fakeMap");
+    mc.hass = { states: mst };            /* a live card must keep getting hass */
+    R.map_fed_hass = fed > 1;
+    R.map_hides_rows = (() => {
+      const card = mc.shadowRoot.querySelector("ha-card");
+      return card ? card.classList.contains("mapMode") : null;
+    })();
+    /* the bare chevron vanished into the map tiles, and the map is draggable so
+       it cannot double as a way out: the map view's back control must be
+       labelled, not just present */
+    R.map_has_back = (() => {
+      const b = mc.shadowRoot.getElementById("ctlBack");
+      if (!b) return null;
+      /* and it must sit in the BOTTOM half: the map card's own zoom controls
+         are top left and the pill landed on them. Asserted by rectangle, not
+         by getComputedStyle().top === "auto": on a positioned element the
+         computed value resolves to used pixels, so that reads "0px" whether
+         the override worked or not, and would have passed on the broken
+         version. */
+      const bb = b.getBoundingClientRect();
+      const box = mc.shadowRoot.getElementById("mapBox").getBoundingClientRect();
+      return [b.classList.contains("mapBack"),
+              b.textContent.replace(/[^A-Za-z]/g, ""),
+              box.height > 0 && bb.top - box.top > box.height / 2];
+    })();
+    /* leaving the view must let the nested card go */
+    mc._setView("");
+    R.map_released = !mc._mapEl;
+    window.loadCardHelpers = realHelpers;
+
     return R;
   }, customStates.toString()));
 
@@ -765,6 +863,22 @@ function customStates(p) {
   check("nothing added when the mode is normal", r.home_normal, "Parked");
   check("Pet Mode is visible without opening Climate", r.home_dog, "Pet Mode \u00b7 Parked");
   check("Defrosting is visible too", r.home_defrost, "Defrosting \u00b7 Parked");
+
+  console.log("\nthe map view");
+  check("tapping Location opens the map",  r.map_view_opened, "map");
+  check("leaving it releases the map card", r.map_released, true);
+  check("HA's own map card is mounted",    r.map_mounted, true);
+  check("one entity, and the configured zoom",
+    [r.map_cfg && r.map_cfg.type, r.map_cfg && r.map_cfg.entities, r.map_cfg && r.map_cfg.default_zoom],
+    ["map", ["device_tracker.m_location_tracker"], 17]);
+  check("the map keeps receiving hass",    r.map_fed_hass, true);
+  check("the map view hides the rows",     r.map_hides_rows, true);
+  check("the back control is a labelled pill, bottom left",
+    r.map_has_back, [true, "Back", true]);
+  check("no coordinates says so plainly",  r.map_no_coords, true);
+  check("location_tap more-info still opens the dialog",
+    r.map_optout_event, "device_tracker.m_location_tracker");
+  check("and does not change view",        r.map_optout_view, "");
 
   console.log("\nthe editor");
   check("renders every car", r.editor_renders_all_cars, 3);

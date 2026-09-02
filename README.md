@@ -205,10 +205,12 @@ Per car:
 | `allow_other_generation` | Use a pack from the other body generation when nothing matches yours. Off by default, because the result is a photograph of a different car. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
-bar), `accent`, `drive_speed`, `show_vin`.
+bar), `accent`, `drive_speed`, `show_vin`, `map_zoom`, `location_tap`.
 
 | Card option | What it does |
 | --- | --- |
+| `map_zoom` | Zoom level for the in-card map view. 15 is about street level; higher is closer. |
+| `location_tap` | `map` (default) opens the in-card map view; `more-info` opens the entity dialog instead. Can also be set per car. |
 | `drive_speed` | Scales the driving animation. 1 is the default; 1.5 makes the road and wheels half again as fast. The animation is proportional to the car's actual speed, so this only changes the overall pace. |
 | `show_vin` | Prints the VIN in the footer beside the year and model. Off by default: it identifies a specific vehicle and dashboards get screenshotted, so it sits in the footer's tooltip instead unless you ask for it. |
 
@@ -271,6 +273,26 @@ polled just as hard and that costs range. Better is an automation that calls
 `tesla_custom.polling_interval` with the driving car's VIN and a shorter
 interval, and restores it when the car parks.
 
+## The map view
+
+Tapping **Location** opens a map of that car inside the card, zoomed to it, with
+a **Back** button bottom left. `map_zoom` sets the zoom, 15 by default.
+
+It is Home Assistant's own map card, built by the card with a single entity, so
+it looks and behaves like every other map on your dashboard and follows the car
+as it moves. It is done that way because there is nothing to link to: the Map
+dashboard is a *strategy* dashboard, generated at runtime from every entity that
+has coordinates, so no URL centres it on one car and none carries a zoom.
+
+Nesting a built-in card means using `loadCardHelpers()`, which is how custom
+cards have always done it but is not a documented API. Every failure path ends
+in a sentence explaining itself and the entity dialog, which is what this row
+opened before. A car with no coordinates says so rather than showing an empty
+box: a sleeping car keeps its last known position, and one that has never
+reported a position has nothing to show.
+
+Prefer the old dialog? `location_tap: more-info`, on the card or on one car.
+
 ## Updating
 
 HACS shows updates as versioned releases. After updating, hard-refresh the
@@ -319,7 +341,7 @@ npm install
 npm test
 ```
 
-113 checks covering entity detection on both integrations, the per-car entity
+123 checks covering entity detection on both integrations, the per-car entity
 overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
 and year, and the driving view including the geometry that keeps the wheels
 rolling at the same speed as the road. It exits non-zero on failure.

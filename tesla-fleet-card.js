@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.8";
+  const CARD_VERSION = "1.1.9";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -116,8 +116,8 @@
     cop: "climate.{p}cabin_overheat_protection",
   };
 
-  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
+  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false, map_zoom: 15, location_tap: "map" };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -1582,6 +1582,20 @@
   .backBtn { position:absolute; left:0; top:0; z-index:2; background:#2b2b2bd9; border:none;
     color:#e6e6e6; font-size:18px; line-height:1; padding:5px 12px 7px; border-radius:15px; cursor:pointer; }
   .backBtn:active { background:#3a3a3a; }
+  /* On the map the small bare chevron disappears into the tiles, and the map
+     itself is draggable so it cannot double as a way out. Nick: "the back
+     button is not obvious". So the map view gets a labelled pill with real
+     contrast, its own border and a shadow, sized as a proper tap target. */
+  /* BOTTOM left, not top: the map card's own zoom controls sit top-left and
+     this pill landed straight on them. top:auto is not optional here: .backBtn
+     sets top:0 and both selectors are one class, so without it the pill stays
+     pinned to the top and quietly covers the zoom buttons again. */
+  .mapBack { left:10px; top:auto; bottom:10px; display:inline-flex; align-items:center; gap:6px;
+    font-size:13px; font-weight:600; line-height:1; color:#fff; padding:9px 14px 9px 11px;
+    background:#161616f2; border:1px solid #ffffff2e; border-radius:10px;
+    box-shadow:0 2px 8px #00000073; }
+  .mapBack:hover { background:#242424f2; }
+  .mapBack .bch { font-size:17px; margin-top:-2px; }
   .carImg { width:100%; display:block; }
   svg.ovl { position:absolute; left:0; top:0; width:100%; height:100%; }
   svg.car text { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; }
@@ -1651,10 +1665,16 @@
 
   .ftr { display:flex; justify-content:space-between; margin-top:10px; font-size:11px; color:#6f6f6f; }
   .climMode .acts, .climMode .rows, .climMode .ftr { display:none; }
+  .mapMode .acts, .mapMode .rows, .mapMode .ftr { display:none; }
+  /* The map card is Home Assistant's own, so it brings its own ha-card
+     chrome. Strip that, or you get a card inside a card. */
+  .mapBox { position:relative; border-radius:10px; overflow:hidden; min-height:260px; }
+  .mapBox ha-card { border:none; box-shadow:none; background:none; border-radius:10px; }
+  .mapNote { padding:26px 20px; text-align:center; color:#9b9b9b; font-size:13px; line-height:1.5; }
   .climPage { max-width:330px; margin:0 auto; }
   .climTemps { text-align:center; color:#9b9b9b; font-size:13px; margin:10px 0 6px; }
 </style>
-<ha-card class="${this._view === "clim" ? "climMode" : ""}">
+<ha-card class="${this._view === "clim" ? "climMode" : this._view === "map" ? "mapMode" : ""}">
   <div class="hdr">
     <div style="position:relative">
       <button class="nmBtn" id="nmBtn"><span class="nm">${car.name}</span>${svgIcon(ICONS.chev)}</button>
@@ -1716,11 +1736,16 @@
 </ha-card>`;
 
       let carHtml = this._carSvg();
-      if ((this._view === "ctl" && this._img("image_side")) || this._view === "clim")
+      if (this._view === "map")
+        carHtml += '<button class="backBtn mapBack" id="ctlBack" title="Back to ' +
+          esc(car.name || "the car") + '">' +
+          '<span class="bch">\u2039</span>Back</button>';
+      else if ((this._view === "ctl" && this._img("image_side")) || this._view === "clim")
         carHtml += '<button class="backBtn" id="ctlBack" title="Back">\u2039</button>';
       this.shadowRoot.getElementById("carBox").innerHTML = carHtml;
       this._buildCarMenu();
       this._wire();
+      if (this._view === "map") this._mountMap();
     }
 
     _wire() {
@@ -1791,7 +1816,13 @@
       };
       q("headClim").addEventListener("click", () => this._setView("clim"));
       q("headChg").addEventListener("click", () => toggleRow("rowChg"));
-      q("headLoc").addEventListener("click", () => this._moreInfo("location"));
+      /* location_tap: "map" (default) opens the in-card map, "more-info" keeps
+         the dialog this row used to open. */
+      q("headLoc").addEventListener("click", () =>
+        String((this._car.location_tap || (this._config && this._config.location_tap) ||
+                "map")).toLowerCase() === "more-info"
+          ? this._moreInfo("location")
+          : this._setView("map"));
 
       // climate controls
       const cpwr = q("climPwr");
@@ -2143,6 +2174,9 @@
 
     _setView(v) {
       if (this._view === v) return;
+      /* the nested map card holds a reference to hass; let it go with the view
+         so a stale element cannot be fed updates or reused in another view */
+      if (this._view === "map") { this._mapEl = null; this._mapWanted = null; }
       this._view = v;
       this._built = false;
       this._build();
@@ -2452,10 +2486,74 @@
     }
 
     _carSvg() {
+      if (this._view === "map") return this._carMap();
       if (this._view === "clim") return this._carClim();
       if (this._resting()) return this._carRest();
       if (this._img("image")) return this._carImg();
       return this._carArt();
+    }
+
+    /* THE MAP VIEW. Home Assistant's Map dashboard is a strategy dashboard, so
+       it is generated at runtime from every entity that has coordinates: there
+       is no URL that centres it on one car and no zoom parameter. So rather
+       than navigate anywhere, the card builds HA's OWN map card with a single
+       entity and a zoom, and shows it in place of the photo.
+
+       loadCardHelpers() is how every custom card that nests a built-in card
+       gets at the factory. It is semi-public rather than documented, so every
+       failure path here ends in a readable note plus the more-info dialog,
+       which is what this row did before and is never worse than a blank box. */
+    _carMap() {
+      const id = this._car._entities && this._car._entities.location;
+      if (!id) return '<div class="mapBox"><div class="mapNote">No location entity for ' +
+        esc(this._car.name || "this car") + '.</div></div>';
+      const st = this._st("location");
+      const at = st && st.attributes;
+      if (!at || typeof at.latitude !== "number" || typeof at.longitude !== "number")
+        return '<div class="mapBox"><div class="mapNote">' + esc(this._car.name || "This car") +
+          ' is not reporting coordinates right now. A sleeping car keeps its last known ' +
+          'position; a car that has never reported one has nothing to show.</div></div>';
+      this._mapWanted = id;
+      return '<div class="mapBox" id="mapBox"></div>';
+    }
+
+    /* Built asynchronously, because loadCardHelpers() returns a promise. Called
+       from _build after the DOM exists. Guarded so a stale promise landing
+       after the user has moved on cannot inject a map into another view. */
+    _mountMap() {
+      const box = this.shadowRoot.getElementById("mapBox");
+      const want = this._mapWanted;
+      if (!box || !want) return;
+      const zoom = Number(this._config && this._config.map_zoom);
+      /* Two configs, richest first. HA card schemas are strict about unknown
+         keys and theme_mode is a newer option, so an older frontend can reject
+         the whole config over it. Falling back to the bare essentials keeps a
+         working map on old and new alike, instead of a note explaining why
+         there is no map. */
+      const base = { type: "map", entities: [want], default_zoom: zoom > 0 ? zoom : 15 };
+      const cfgs = [Object.assign({ aspect_ratio: "4x3", theme_mode: "dark" }, base), base];
+      const fail = (why) => {
+        if (this._view !== "map") return;
+        box.innerHTML = '<div class="mapNote">The map could not be built in the card' +
+          ' (' + esc(why) + '). Opening the usual dialog instead.</div>';
+        this._moreInfo("location");
+      };
+      const helpers = window.loadCardHelpers && window.loadCardHelpers();
+      if (!helpers || !helpers.then) return fail("no card helpers");
+      helpers.then((h) => {
+        if (this._view !== "map" || this._mapWanted !== want) return;
+        if (!h || !h.createCardElement) return fail("no card factory");
+        let el = null, last = "";
+        for (let i = 0; i < cfgs.length && !el; i++) {
+          try { el = h.createCardElement(cfgs[i]); }
+          catch (e) { last = String((e && e.message) || e); }
+        }
+        if (!el) return fail(last || "no map card");
+        el.hass = this._hass;
+        this._mapEl = el;
+        box.innerHTML = "";
+        box.appendChild(el);
+      }).catch((e) => fail(String((e && e.message) || e)));
     }
 
     /* Built-in fallback artwork - outlines traced 1:1 from reference photos of the
@@ -2593,6 +2691,9 @@
          so the tier change is a re-render of this one element; it happens
          only when the car crosses the threshold. Clearing it while parked
          also stops six copies of the pack photo animating out of sight. */
+      /* the nested map card is a live HA card: it needs every hass update, or
+         the marker freezes where the car was when the view opened */
+      if (this._mapEl && this._view === "map") this._mapEl.hass = this._hass;
       const dOvl = q("driveOvl");
       if (dOvl) {
         /* "still" is a car in gear that is not moving - stopped at a junction.
