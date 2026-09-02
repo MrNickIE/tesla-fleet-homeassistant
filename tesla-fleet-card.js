@@ -232,13 +232,30 @@
      refitted four times so the centre settles onto the hub. A centre off
      by a unit is a visible wobble, so this is worth doing properly.
 
-     TWO: the rear wheel is only about sixteen source pixels across and
-     the most obliquely viewed, so un-squashing it doubles those pixels
-     into obvious vertical streaks. But it is the SAME WHEEL as the front
-     one. So the rear takes the front wheel's pixels, rotated, scaled by
-     the ratio of the two radii and squashed into the rear's own ellipse.
-     Same wheel design, correct perspective, several times the detail. A
-     brightness lift covers the rear sitting in slightly less shadow.
+     TWO: the rear wheel cannot be fitted from its own pixels, and must be
+     DERIVED FROM THE FRONT ONE. Both near-side wheels lie in the same plane
+     of the car, and these renders are close enough to a long lens that
+     circles in that plane project to ellipses of the same shape and lean,
+     differing only in position and size. Fitting the rear independently gave
+     91 degrees against the front's 109, and far too narrow. Nick spotted that
+     from an overlay too: "the back is still off. They are BOTH the same
+     angle.... (as the front)". He was right, and the reason the fit failed is
+     instructive: the rear tyre is dark against dark ground on one side and
+     dark shadow on the other, so a mask loses its width, while leaking down
+     into the shadow gains it height. Both errors push the same way, towards
+     an ellipse too narrow and too upright, which is exactly what came out.
+
+     So a pack stores the front ellipse in full and the rear as nothing but a
+     centre and a scale. The shape and the lean are shared by construction,
+     which is the point: the invariant is in the data model rather than in two
+     numbers that have to agree, so it cannot drift apart again.
+
+     The rear also takes the front's PIXELS. It is the same wheel, it is only
+     about sixteen source pixels across, and it is the more obliquely viewed
+     of the two, so un-squashing its own pixels turns them into vertical
+     streaks. Borrowing the front's gives several times the detail with the
+     correct perspective; a per-pack brightness lift covers the rear sitting
+     in slightly less shadow.
 
      Three copies a few degrees apart at a third opacity each give a light
      motion blur, which is what a camera sees and which also softens what
@@ -250,25 +267,34 @@
     spread: 18       // degrees between the first and last copy
   };
 
-  /* [cx, cy, a, b, majorAngle] per wheel in Rest view units, plus the
-     rear's brightness relative to the front. */
+  /* front: [cx, cy, a, b, majorAngle] in Rest view units, where a is the
+     major semi-axis, b the minor, and majorAngle is degrees from the positive
+     x-axis with y downward. rear: [cx, cy, scale] - it borrows the front's
+     shape and lean, scaled. lift: the rear's brightness relative to the
+     front. Fitted on the FRONT wheel only, which is the one that sits against
+     bright bodywork and so masks cleanly. */
   const PACK_WHEELS = {
-    "models/y/red/app": { lift: 1.26,
-      front: [106.9, 77.9, 15.65, 10.99, 109.3],
-      rear:  [187.9, 45.8, 13.83, 6.11, 91.1] },
-    "models/y/white/app": { lift: 1.11,
-      front: [108.8, 91.7, 12.27, 8.19, 113.4],
-      rear:  [192.4, 59.1, 10.92, 6.47, 108.7] },
-    "models/3/grey/app": { lift: 1.06,
-      front: [107.0, 81.4, 15.19, 10.33, 95.7],
-      rear:  [188.2, 50.0, 13.75, 8.15, 94.1] }
+    "models/y/red/app":   { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
+                            rear: [187.9, 45.8, 0.90] },
+    "models/y/white/app": { lift: 1.11, front: [108.8, 91.7, 12.27, 8.19, 113.4],
+                            rear: [192.4, 59.1, 0.90] },
+    "models/3/grey/app":  { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
+                            rear: [188.2, 50.0, 0.90] }
   };
+
+  /* expand rear: [cx, cy, scale] into a full ellipse using the front's shape */
+  function rearEllipse(front, rear) {
+    if (!front || !rear || front.length < 5 || rear.length < 3) return null;
+    const s = rear[2] > 0 ? rear[2] : 1;
+    return [rear[0], rear[1], front[2] * s, front[3] * s, front[4]];
+  }
 
   /* Rotate the wheel photographed at `src` and land it in the ellipse `dst`.
      Both are [cx, cy, a, b, phi]. The transform is M . rotate . M-inverse,
      where M squashes a circle into the ellipse: that is the only form that
      turns an ellipse in its own plane rather than skewing it. */
   function spinWheel(id, src, dst, lift) {
+    if (!src || !dst || src.length < 5 || dst.length < 5) return "";
     const [sx, sy, sa, sb, sp] = src, [dx, dy, da, db, dp] = dst;
     if (!(sa > 0 && sb > 0 && da > 0 && db > 0)) return "";
     const scale = da / sa;
@@ -313,7 +339,7 @@
         </feComponentTransfer>
       </filter></defs>` +
       spinWheel("f", wheels.front, wheels.front, 0) +
-      spinWheel("r", wheels.front, wheels.rear, 1);
+      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1);
   }
 
   /* Dashed lane markings sliding along their own axis. The slide is

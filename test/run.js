@@ -188,7 +188,7 @@ function customStates(p) {
         { name: "T", model: "Model Y", paint: "red", prefix: "t_",
           image_side: "side.jpg",
           wheels: { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
-                    rear: [187.9, 45.8, 13.83, 6.11, 91.1] } }, extra || {})] });
+                    rear: [187.9, 45.8, 0.90] } }, extra || {})] });
       c.hass = { states: st };
       return c;
     };
@@ -204,6 +204,14 @@ function customStates(p) {
         /* the rotating pixels must be the pack photo itself, not drawn art */
         wheelImg: o && o.querySelector("image#dwImg")
           ? o.querySelector("image#dwImg").getAttribute("href") : null,
+        /* both wheels lie in the same plane of the car, so they must share a
+           lean and an axis ratio. Read the two clip ellipses back and compare:
+           an independently fitted rear came out 18 degrees off and looked it. */
+        clipGeom: o ? Array.prototype.map.call(o.querySelectorAll("clipPath[id^=dwC] ellipse"),
+          (e) => [e.getAttribute("transform"),
+                  /* 2dp: the clip's rx/ry are written rounded to 2dp, so a
+                     third digit here compares rounding noise, not geometry */
+                  (+e.getAttribute("rx") / +e.getAttribute("ry")).toFixed(2)]) : null,
         cycle: o && o.querySelector("line > animate")
           ? o.querySelector("line > animate").getAttribute("dur") : null,
         sub: sub ? sub.textContent : null
@@ -354,6 +362,9 @@ function customStates(p) {
   check("the wheels rotate real pixels",   r.drive_drive.wheelImg, "side.jpg");
   check("both wheels are clipped",         r.drive_drive.wheelClips, 2);
   check("three blur copies per wheel",     r.drive_drive.spinners, 6);
+  check("both wheels share an axis ratio", r.drive_drive.clipGeom[0][1], r.drive_drive.clipGeom[1][1]);
+  check("both wheels share a lean",
+    r.drive_drive.clipGeom[0][0].split(" ")[0], r.drive_drive.clipGeom[1][0].split(" ")[0]);
   check("the road is calm, not frantic",   r.drive_drive.cycle, "1.7s");
   check("a pack can set its own cycle",    r.drive_cycle_override, "2.4s");
   check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
