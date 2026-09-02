@@ -144,6 +144,7 @@ Per car:
 | `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
 | `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
 | `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
+| `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. Tesla Custom reports the same preset and fan lists for every car, so the card cannot tell a Bioweapon Defense car from one without it. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
 bar), `accent`.
@@ -165,6 +166,24 @@ Designed by mimicking the official Tesla app. Built end-to-end by
 [Claude](https://claude.ai) in conversation with MrNickIE, who supplied
 the screenshots, the screen recordings, the opinions, and the phrase
 "you have drawn a SPACESHIP". Shared under the MIT licence - enjoy.
+
+## Seat, wheel and climate display
+
+Tesla stores a **mode and a level**, not a single number: Auto, or Heat or
+Cool at Low, Medium or High. Setting a level by hand moves the car out of
+Auto, which is what the app's Heat / Auto control is doing.
+
+The card follows that:
+
+- **Off** - grey waves
+- **Heat** - one, two or three red waves
+- **Cool** - the same in blue, on cars with ventilated seats
+- **Auto** - waves plus the word `Auto`, the way the app labels it, so Auto
+  is never mistaken for maximum heat
+
+The steering wheel gets the same treatment with two steps rather than three,
+matching the car. On models that expose only a plain on/off switch the card
+falls back to that automatically.
 
 ## Running the tests
 

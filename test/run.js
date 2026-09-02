@@ -126,6 +126,70 @@ function customStates(p) {
     R.card_renders = mkCard([{ name: "K", model: "Model 3", paint: "grey", prefix: "buddy_" }],
       customStates("buddy_")).shadowRoot.innerHTML.length > 2000;
 
+    /* ---- seat and wheel heat: mode AND level ---------------------------
+       Tesla stores a mode plus a level. Flattening them made Auto look like
+       maximum heat and made a cooled seat render in hot red. Both were found
+       by driving a real car, not by reading the code. */
+    const climCard = (extra) => {
+      const st = customStates("t_");
+      Object.keys(extra).forEach((k) => { st[k] = { entity_id: k, state: extra[k], attributes: {} }; });
+      st["climate.t_hvac_climate_system"] = { entity_id: "climate.t_hvac_climate_system", state: "heat_cool",
+        attributes: { preset_mode: "normal", preset_modes: ["normal", "defrost", "keep", "dog", "camp"],
+                      fan_mode: "off", fan_modes: ["off", "bioweapon"], current_temperature: 20, temperature: 20 } };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [{ name: "T", model: "Model 3", paint: "grey", prefix: "t_" }] });
+      c.hass = { states: st };
+      c._view = "clim"; c._built = false; c.hass = { states: st };
+      return c;
+    };
+    const glyph = (c, id, n) => {
+      const waves = [];
+      for (let i = 0; i < n; i++) {
+        const w = c.shadowRoot.getElementById(id + "_w" + i);
+        waves.push(w ? w.getAttribute("stroke") : null);
+      }
+      const a = c.shadowRoot.getElementById(id + "_auto");
+      /* count only genuinely coloured waves. A MISSING element reads as null,
+         and counting null as "lit" made these tests pass against the old
+         version for the wrong reason. */
+      const ON = ["#e64545", "#4aa3ff"];
+      return { lit: waves.filter((x) => ON.indexOf(x) >= 0).length,
+               col: waves.find((x) => ON.indexOf(x) >= 0) || null,
+               auto: a ? a.style.display !== "none" : null };
+    };
+    const seat = (v) => glyph(climCard({ "select.t_heated_seat_left": v }), "seatFL", 3);
+    R.seat_off        = seat("Off");
+    R.seat_low        = seat("Low");
+    R.seat_high       = seat("High");
+    R.seat_heatMedium = seat("Heat Medium");
+    R.seat_coolHigh   = seat("Cool High");
+    R.seat_auto       = seat("Auto");
+    R.wheel_low   = glyph(climCard({ "select.t_heated_steering_wheel": "Low",  "switch.t_heated_steering": "on" }), "wheelHeat", 2);
+    R.wheel_high  = glyph(climCard({ "select.t_heated_steering_wheel": "High", "switch.t_heated_steering": "on" }), "wheelHeat", 2);
+    R.wheel_auto  = glyph(climCard({ "select.t_heated_steering_wheel": "Auto", "switch.t_heated_steering": "off" }), "wheelHeat", 2);
+    R.wheel_switchOnly = glyph(climCard({ "switch.t_heated_steering": "on" }), "wheelHeat", 2);
+
+    /* ---- the running mode must be visible on the HOME view -------------
+       Pet Mode on a parked car used to show nothing outside the Climate view. */
+    const homeSub = (preset) => {
+      const st = customStates("t_");
+      st["binary_sensor.t_online"].state = "on";   // else the card reads Offline
+      st["sensor.t_shift_state"].state = "P";
+      st["climate.t_hvac_climate_system"] = { entity_id: "climate.t_hvac_climate_system", state: "heat_cool",
+        attributes: { preset_mode: preset, preset_modes: ["normal", "defrost", "keep", "dog", "camp"],
+                      fan_mode: "off", fan_modes: ["off", "bioweapon"], current_temperature: 20, temperature: 20 } };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [{ name: "T", model: "Model 3", paint: "grey", prefix: "t_" }] });
+      c.hass = { states: st };
+      const sub = c.shadowRoot.getElementById("sub");
+      return sub ? sub.textContent : null;
+    };
+    R.home_normal  = homeSub("normal");
+    R.home_dog     = homeSub("dog");
+    R.home_defrost = homeSub("defrost");
+
     /* ---- the editor ---------------------------------------------------- */
     const ed = document.createElement("tesla-fleet-card-editor");
     document.body.appendChild(ed);
@@ -193,6 +257,23 @@ function customStates(p) {
   console.log("\nrendering");
   check("the card renders", r.card_renders, true);
   check("no uncaught page errors", pageErrors, []);
+
+  console.log("\nseat and wheel heat");
+  check("off shows no lit waves",                 [r.seat_off.lit, r.seat_off.auto], [0, false]);
+  check("Low lights one wave",                    r.seat_low.lit, 1);
+  check("High lights three",                      r.seat_high.lit, 3);
+  check("Buddy's \"Heat Medium\" lights two",      r.seat_heatMedium.lit, 2);
+  check("cooling is BLUE, not hot red",           [r.seat_coolHigh.lit, r.seat_coolHigh.col], [3, "#4aa3ff"]);
+  check("Auto is labelled, not shown as maximum", r.seat_auto.auto, true);
+  check("wheel Low lights one of two",            r.wheel_low.lit, 1);
+  check("wheel High lights two",                  r.wheel_high.lit, 2);
+  check("wheel Auto is labelled",                 r.wheel_auto.auto, true);
+  check("wheel falls back to the switch",         r.wheel_switchOnly.lit, 2);
+
+  console.log("\nthe running mode on the home view");
+  check("nothing added when the mode is normal", r.home_normal, "Parked");
+  check("Pet Mode is visible without opening Climate", r.home_dog, "Pet Mode \u00b7 Parked");
+  check("Defrosting is visible too", r.home_defrost, "Defrosting \u00b7 Parked");
 
   console.log("\nthe editor");
   check("renders every car", r.editor_renders_all_cars, 3);

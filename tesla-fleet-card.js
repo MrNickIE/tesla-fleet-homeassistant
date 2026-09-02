@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.2";
+  const CARD_VERSION = "1.1.3";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -32,6 +32,10 @@
     seat_rc: "select.{p}heated_seat_rear_center",
     seat_rr: "select.{p}heated_seat_rear_right",
     steering_heat: "switch.{p}heated_steering",
+    /* cars with a multi-level wheel expose BOTH a switch and a select. Prefer
+       the select so Low and High are distinguishable; Patsy has only the
+       switch, so the fallback matters. */
+    steering_heat_sel: "select.{p}heated_steering_wheel",
     lock: "lock.{p}doors",
     doors: "binary_sensor.{p}doors",
     windows_cover: "cover.{p}windows",
@@ -82,6 +86,7 @@
     seat_rc: "select.{p}seat_heater_rear_center",
     seat_rr: "select.{p}seat_heater_rear_right",
     steering_heat: "select.{p}steering_wheel_heater",  // a select here, not a switch
+    steering_heat_sel: "",
     lock: "lock.{p}lock",
     doors: "",
     windows_cover: "cover.{p}windows",
@@ -112,7 +117,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], paint: "", prefix: "", entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -183,6 +188,25 @@
     pin: "M12 11.5A2.5 2.5 0 0 1 9.5 9 2.5 2.5 0 0 1 12 6.5 2.5 2.5 0 0 1 14.5 9a2.5 2.5 0 0 1-2.5 2.5M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7z",
   };
 
+  /* Mode-button glyphs. Composed from circles, rects and short curves on a
+     24x24 grid rather than copied path data, so there is nothing to
+     mis-remember. The wrapper sets fill:currentColor; stroked parts override
+     it themselves. */
+  const CLIM_GLYPH = {
+    paw: '<circle cx="6.5" cy="9.6" r="2.1"/><circle cx="10.4" cy="6.6" r="2.1"/>' +
+         '<circle cx="14.9" cy="7.1" r="2.1"/><circle cx="18.6" cy="10.9" r="2.1"/>' +
+         '<ellipse cx="12.4" cy="16.6" rx="5.3" ry="4.3"/>',
+    tent: '<path d="M12 3.2 L2.6 20.4 H9.7 L12 15.2 L14.3 20.4 H21.4 Z"/>',
+    defrost: '<rect x="3.5" y="17.2" width="17" height="2.1" rx="1.05"/>' +
+             [7, 12, 17].map((x) =>
+               `<path d="M ${x} 14.6 q 2.6 -2 0 -4 q -2.6 -2 0 -4" fill="none"` +
+               ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>').join(""),
+  };
+  function climIcon(glyph) {
+    return `<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"` +
+           ` style="vertical-align:-3.5px;margin-right:9px;flex:none">${glyph}</svg>`;
+  }
+
   const CLIM_ANCHOR_DEFAULTS = { fl: [121, 164], fr: [233, 164], rl: [123, 289], rc: [176, 289], rr: [229, 289], wheel: [234, 97] };
   function anchor(map, key, def) {
     const v = map && map[key];
@@ -201,8 +225,30 @@
     return `<g id="${id}" class="tapa" style="cursor:pointer">
       <circle cx="${x}" cy="${y}" r="26" fill="#000" opacity="0"/>
       ${wave(-9, 0)}${wave(0, 1)}${wave(9, 2)}
+      <text id="${id}_auto" x="${x}" y="${y + 25}" text-anchor="middle" font-size="10.5"
+            font-weight="700" fill="${IDLE_COL}" style="display:none">Auto</text>
     </g>`;
   }
+
+  /* Tesla stores a MODE and a LEVEL, not a single number. The app shows this
+     as Auto, or Heat / Cool at a level, and setting a level by hand moves the
+     car out of Auto into Heat (confirmed against the app on a real car,
+     2026-09-02). The old code did `.replace(/^(heat|cool) /, "")` and looked
+     the remainder up in a table with `auto: 3`, which threw the mode away.
+     That is why a seat on Auto rendered as maximum heat and a COOLED seat
+     rendered as a hot one, in red, on cars with ventilated seats. */
+  function parseHeat(state) {
+    const v = String(state == null ? "" : state).trim().toLowerCase();
+    if (!v || v === "off" || v === "unavailable" || v === "unknown")
+      return { mode: "off", level: 0 };
+    if (v === "auto") return { mode: "auto", level: 0 };
+    const mode = v.indexOf("cool") === 0 ? "cool" : "heat";
+    const lvl = { low: 1, medium: 2, med: 2, high: 3, on: 3 }[v.replace(/^(heat|cool)\s*/, "")];
+    /* a plain switch reports "on" with no level, so treat it as full */
+    return { mode, level: lvl === undefined ? 1 : lvl };
+  }
+
+  const HEAT_COL = "#e64545", COOL_COL = "#4aa3ff", IDLE_COL = "#a9adb2";
 
   /* -- Defrost glow ----------------------------------------------------------
      Measured off Nick's own app screen recording (ffmpeg, 15fps sampling of a
@@ -630,11 +676,12 @@
       return cs.attributes.preset_mode === "defrost";
     }
 
+    /* prefer the level select, fall back to the plain switch */
+    _steerEnt() { return this._st("steering_heat_sel") || this._st("steering_heat"); }
     _steeringOn() {
-      const s = this._st("steering_heat");
+      const s = this._steerEnt();
       if (!s) return false;
-      const v = String(s.state).toLowerCase();
-      return v !== "off" && v !== "unavailable" && v !== "unknown";
+      return parseHeat(s.state).mode !== "off";
     }
     _minsToFull() {
       const s = this._st("charge_complete");
@@ -743,7 +790,36 @@
       return (s && s.attributes.unit_of_measurement) || fallback || "";
     }
     _call(domain, service, data) {
-      this._hass.callService(domain, service, data);
+      const p = this._hass.callService(domain, service, data);
+      /* callService returns a promise and the card used to drop it. Combined
+         with the optimistic pends below that meant a REJECTED command left the
+         card confidently showing the wrong state for the full 25s window and
+         then snapping back with no explanation. Tesla rejects commands for
+         real reasons: Pet Mode blocks Max Defrost, the car is asleep, you are
+         rate limited. An honest blip beats a confident lie. */
+      if (p && typeof p.catch === "function") p.catch(() => this._cmdFailed());
+    }
+    _cmdFailed() {
+      this._pend = {};
+      this._pendSeat = null; this._pendPreset = null; this._pendFan = null; this._pendCop = null;
+      this._toast("Command failed");
+      this._update();
+    }
+    /* centred version of the seat toast, for messages not tied to one seat */
+    _toast(label) {
+      const g = this.shadowRoot && this.shadowRoot.getElementById("heatToast");
+      if (!g) return;
+      const txt = this.shadowRoot.getElementById("heatToastTxt");
+      const bg = this.shadowRoot.getElementById("heatToastBg");
+      if (!txt || !bg) return;
+      txt.textContent = label;
+      const w = label.length * 7.6 + 18;
+      const tx = Math.max(4, 180 - w / 2), ty = 560;
+      bg.setAttribute("x", tx); bg.setAttribute("y", ty); bg.setAttribute("width", w);
+      txt.setAttribute("x", tx + 9); txt.setAttribute("y", ty + 17);
+      g.style.display = "";
+      clearTimeout(this._toastT);
+      this._toastT = setTimeout(() => { g.style.display = "none"; }, 2200);
     }
     _moreInfo(key) {
       const id = this._car._entities[key];
@@ -1128,18 +1204,23 @@
       });
       const whG = q("wheelHeat");
       if (whG) whG.addEventListener("click", () => {
-        const s = this._st("steering_heat");
+        const s = this._steerEnt();
         if (!s) return;
-        if (s.entity_id.startsWith("switch.")) {          // tesla_custom
-          this._call("switch", s.state === "on" ? "turn_off" : "turn_on", { entity_id: s.entity_id });
-        } else {                                          // tesla_fleet: a select (off/low/high)
-          const avail = Array.isArray(s.attributes.options) && s.attributes.options.length
-            ? s.attributes.options : ["off", "high"];
-          const off = avail.find((o) => o.toLowerCase() === "off") || avail[0];
-          const hot = avail.find((o) => o.toLowerCase() === "high") ||
-                      avail.find((o) => o.toLowerCase() !== "off") || avail[avail.length - 1];
-          const next = this._steeringOn() ? off : hot;
+        if (s.entity_id.startsWith("select.")) {
+          /* step Off -> Low -> High -> Off using the car's own option order.
+             Auto is skipped in the cycle: tapping out of Auto goes to the
+             first real level, which is what the app does when you set a level
+             by hand. Two heat steps on a real car, so the cycle is short. */
+          const avail = (s.attributes.options || []).filter((o) => String(o).toLowerCase() !== "auto");
+          if (!avail.length) return;
+          const cur = String(s.state).toLowerCase();
+          const i = avail.findIndex((o) => String(o).toLowerCase() === cur);
+          const next = i < 0
+            ? (avail.find((o) => String(o).toLowerCase() !== "off") || avail[0])
+            : avail[(i + 1) % avail.length];
           this._call("select", "select_option", { entity_id: s.entity_id, option: next });
+        } else {                                          // switch-only cars, eg the Model Y
+          this._call("switch", s.state === "on" ? "turn_off" : "turn_on", { entity_id: s.entity_id });
         }
       });
       const dfBtn = q("btnDefrost");
@@ -1629,6 +1710,12 @@
         <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4C15.72,4 18.85,6.55 19.74,10H4.26C5.15,6.55 8.28,4 12,4M12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14M4.26,14H8.09L11,17V19.93C7.55,19.5 4.79,17.06 4.26,14M15.91,14H19.74C19.21,17.06 16.45,19.5 13,19.93V17L15.91,14Z"
               fill="#a9adb2"/>
       </g>
+      <path id="wheelHeat_w0" d="M ${A.wheel[0] - 5} ${A.wheel[1] - 15} q 3.4 -2.6 0 -5.2 q -3.4 -2.6 0 -5.2"
+            stroke="#a9adb2" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <path id="wheelHeat_w1" d="M ${A.wheel[0] + 5} ${A.wheel[1] - 15} q 3.4 -2.6 0 -5.2 q -3.4 -2.6 0 -5.2"
+            stroke="#a9adb2" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <text id="wheelHeat_auto" x="${A.wheel[0]}" y="${A.wheel[1] + 25}" text-anchor="middle"
+            font-size="10.5" font-weight="700" fill="#a9adb2" style="display:none">Auto</text>
     </g>
     <g id="heatToast" style="display:none">
       <rect id="heatToastBg" x="0" y="0" rx="6" height="24" width="90" fill="#000000d0"/>
@@ -1645,7 +1732,7 @@
     <button class="arrow" id="tUp">›</button>
     <button class="pwr" id="climVent">${svgIcon(ICONS.vent)}<span>Vent</span></button>
   </div>
-  <button class="defrostBtn" id="btnDefrost">Defrost Car</button>
+  <button class="defrostBtn" id="btnDefrost">${climIcon(CLIM_GLYPH.defrost)}Defrost Car</button>
   ${this._climExtraHtml()}
 </div>`;
     }
@@ -1657,13 +1744,19 @@
       const fans = (cs && cs.attributes.fan_modes) || [];
       const presets = (cs && cs.attributes.preset_modes) || [];
       const has = (arr, v) => arr.some((o) => String(o).toLowerCase() === v);
+      /* tesla_custom reports the SAME preset_modes and fan_modes list for every
+         car, so these lists are not capability detection. Buddy is offered
+         Bioweapon Defense and has no such thing. There is no reliable signal
+         to test, so a car can opt out by name: hide_climate: [bio, camp, pet]. */
+      const hidden = (this._car.hide_climate || []).map((x) => String(x).toLowerCase());
+      const show = (k) => hidden.indexOf(k) < 0;
       let html = "";
-      if (has(fans, "bioweapon"))
-        html += `<button class="defrostBtn climX" id="btnBio">Bioweapon Defense Mode</button>`;
-      if (has(presets, "camp"))
-        html += `<button class="defrostBtn climX" id="btnCamp">Camp Mode</button>`;
-      if (has(presets, "dog"))
-        html += `<button class="defrostBtn climX" id="btnPet">Pet Mode</button>`;
+      if (has(fans, "bioweapon") && show("bio"))
+        html += `<button class="defrostBtn climX" id="btnBio">${climIcon(`<path d="${ICONS.shield}"/>`)}Bioweapon Defense Mode</button>`;
+      if (has(presets, "camp") && show("camp"))
+        html += `<button class="defrostBtn climX" id="btnCamp">${climIcon(CLIM_GLYPH.tent)}Camp Mode</button>`;
+      if (has(presets, "dog") && show("pet"))
+        html += `<button class="defrostBtn climX" id="btnPet">${climIcon(CLIM_GLYPH.paw)}Pet Mode</button>`;
       const cop = this._st("cop");
       if (cop) {
         let segs;
@@ -1785,6 +1878,14 @@
           subTxt = (h ? h + "h " : "") + m + "m remaining to charge limit";
         }
       }
+      /* The app puts the running mode where the title goes, so you cannot miss
+         it. The card's equivalent is this status line. Pet Mode on a parked car
+         used to be invisible unless you opened the Climate view, which is a bad
+         way to treat a mode whose whole job is keeping an animal safe. */
+      const climS0 = this._st("climate");
+      const pmode = String((climS0 && climS0.attributes.preset_mode) || "").toLowerCase();
+      const MODE_LABEL = { dog: "Pet Mode", camp: "Camp Mode", keep: "Keep Climate On", defrost: "Defrosting" };
+      if (MODE_LABEL[pmode]) subTxt = MODE_LABEL[pmode] + " \u00b7 " + subTxt;
       q("sub").textContent = subTxt;
 
       // on-car states
@@ -1903,8 +2004,27 @@
         (outT === null ? "" : (inT === null ? "" : "  ·  ") + "Exterior " + Math.round(outT) + "°C") || "-";
       const cVent = q("climVent");
       if (cVent) cVent.classList.toggle("on", this._is("windows_cover", "open"));
-      const LVL = { off: 0, low: 1, medium: 2, high: 3, auto: 3 };
       const hideSeats = (this._car.hide_seats || []).map((x) => String(x).toLowerCase());
+      /* Auto is a MODE, not a level. The app writes the word under the glyph
+         rather than implying a level, so the card does the same. The waves are
+         still coloured, because the car may well be heating right now; the
+         label is what stops Auto reading as "someone set this to maximum". */
+      const paintHeat = (id, h) => {
+        const g = q(id);
+        if (!g) return;
+        const col = h.mode === "cool" ? COOL_COL : HEAT_COL;
+        const lit = h.mode === "auto" ? 3 : h.level;
+        g.classList.toggle("heatOn", h.mode !== "off");
+        for (let i = 0; i < 3; i++) {
+          const w = q(id + "_w" + i);
+          if (w) w.setAttribute("stroke", i < lit ? col : IDLE_COL);
+        }
+        const at = q(id + "_auto");
+        if (at) {
+          at.style.display = h.mode === "auto" ? "" : "none";
+          at.setAttribute("fill", col);
+        }
+      };
       [["seatFL","seat_fl"],["seatFR","seat_fr"],["seatRL","seat_rl"],["seatRR","seat_rr"]].forEach(([id, key]) => {
         const g = q(id);
         if (!g) return;
@@ -1917,19 +2037,31 @@
         if (hidden) return;
         let st = s.state || "off";
         if (this._pendSeat && this._pendSeat.key === key && Date.now() - this._pendSeat.ts < 12000) st = this._pendSeat.val;
-        const lvl = LVL[String(st).toLowerCase().replace(/^(heat|cool) /, "")] || 0;
-        g.classList.toggle("heatOn", lvl > 0);
-        for (let i = 0; i < 3; i++) {
-          const w = q(id + "_w" + i);
-          if (w) w.setAttribute("stroke", i < lvl ? "#e64545" : "#a9adb2");
-        }
+        paintHeat(id, parseHeat(st));
       });
       if (q("wheelHeat")) {
-        q("wheelHeat").style.display = this._st("steering_heat") ? "" : "none";
-        const whOn = this._steeringOn();
+        const wEnt = this._steerEnt();
+        q("wheelHeat").style.display = wEnt ? "" : "none";
+        const wh = parseHeat(wEnt && wEnt.state);
+        const whOn = wh.mode !== "off";
+        /* the app steps the wheel glyph through its levels the same way it
+           steps the seats, so two waves here rather than three: a real car has
+           two heat steps on the wheel, not three. */
+        const wCol = wh.mode === "cool" ? COOL_COL : HEAT_COL;
+        const wLit = wh.mode === "auto" ? 2 : Math.min(wh.level, 2);
+        for (let i = 0; i < 2; i++) {
+          const w = q("wheelHeat_w" + i);
+          if (w) w.setAttribute("stroke", i < wLit ? wCol : IDLE_COL);
+        }
+        const wAuto = q("wheelHeat_auto");
+        if (wAuto) {
+          wAuto.style.display = wh.mode === "auto" ? "" : "none";
+          wAuto.setAttribute("fill", wh.mode === "cool" ? COOL_COL : HEAT_COL);
+        }
         q("wheelHeat").classList.toggle("wheelOn", whOn);
         const wIc = q("wheelHeatIcon");
-        if (wIc) wIc.querySelector("path").setAttribute("fill", whOn ? "#e64545" : "#a9adb2");
+        if (wIc) wIc.querySelector("path").setAttribute("fill",
+          whOn ? (wh.mode === "cool" ? COOL_COL : HEAT_COL) : IDLE_COL);
       }
       const dfOn = this._defrostOn();
       const dfB = q("btnDefrost");
