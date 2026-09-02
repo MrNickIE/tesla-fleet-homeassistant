@@ -267,10 +267,10 @@ function customStates(p) {
       { wheels: null, road: null,
         image_side: "/local/Tesla/models/y/red/app/side.jpg?v=1" }));
     /* speed tiers: below 20 km/h the road runs at 1.7s, above it doubles */
-    R.tier_slow = driveState(driveCard("D", 6)).cycle;    /* 6mph  = 9.7 km/h */
-    R.tier_fast = driveState(driveCard("D", 42)).cycle;   /* 42mph = 68 km/h  */
-    R.tier_slow_wheel = driveState(driveCard("D", 6)).wheelDur;
-    R.tier_fast_wheel = driveState(driveCard("D", 42)).wheelDur;
+    R.tier_slow = driveState(driveCard("D", 12)).cycle;   /* 12 km/h */
+    R.tier_fast = driveState(driveCard("D", 56)).cycle;   /* 56 km/h, Patsy's */
+    R.tier_slow_wheel = driveState(driveCard("D", 12)).wheelDur;
+    R.tier_fast_wheel = driveState(driveCard("D", 56)).wheelDur;
     /* A wheel that does not roll with the road under it is the first thing
        the eye catches, and it caught Nick's. The rotation period must be
        DERIVED from the road, so the ratio between them cannot depend on the
@@ -471,8 +471,11 @@ function customStates(p) {
   check("and matches the rolling geometry",
     Math.abs(parseFloat(r.tier_fast_wheel) - r.wheel_expected_fast) < 0.06, true);
   check("a pack can set its own cycle",    r.drive_cycle_override, "1.2s");
-  check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
-  check("miles stay miles",                r.drive_speed_imperial, "42 mph");
+  check("speed replaces the parked timer", r.drive_drive.sub, "42 km/h");
+  /* the field is in the car's display units, proven with the odometer, so
+     nothing is converted; only the label follows the range sensor */
+  check("no conversion, km/h labelled",    r.drive_drive.sub, "42 km/h");
+  check("an imperial car says mph",        r.drive_speed_imperial, "42 mph");
   check("a stopped car keeps its status",  r.drive_no_speed, "Driving");
   check("drive_motion: off draws no road", r.drive_motion_off.lines, 0);
   check("drive_motion: off stills wheels", r.drive_motion_off.spinners, 0);

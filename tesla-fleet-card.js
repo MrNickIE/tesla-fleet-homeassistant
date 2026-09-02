@@ -25,7 +25,7 @@
      inert when the helper is absent, but the only correct fix is to
      delete this block and the two references to it. */
   const DEMO_DRIVE = "input_boolean.tesla_card_drive_demo";
-  const DEMO_SPEED_MPH = 42;
+  const DEMO_SPEED = 68;     // in the car's display units
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -983,12 +983,15 @@
     }
     /* Speed in km/h whatever the car displays, for choosing the animation
        tier. Kept apart from _speed(), which formats it for the eye. */
+    /* km/h whatever the car displays, so the tier threshold is a real speed
+       rather than 20 of whichever unit happens to be configured */
     _speedKph() {
       const t = this._st("location");
       let raw = t && t.attributes ? t.attributes.speed : null;
-      if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED_MPH;
-      const mph = Number(raw);
-      return isFinite(mph) && mph > 0 ? mph * 1.609344 : null;
+      if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED;
+      const v = Number(raw);
+      if (!isFinite(v) || v <= 0) return null;
+      return this._imperial() ? v * 1.609344 : v;
     }
     _demoDrive() {
       return !!(this._hass && this._hass.states && this._hass.states[DEMO_DRIVE] &&
@@ -1071,12 +1074,28 @@
       if (raw === null || raw === undefined || raw === "") return null;
       return this._speedFrom(raw);
     }
+    /* MEASURED, not assumed. This used to treat the value as mph and convert
+       it, on the reasoning that Tesla's API reports mph regardless of the
+       car's own units. That was wrong, and it was flagged at the time as the
+       one number here nobody had watched a car produce.
+
+       Settled with the odometer, which is the honest instrument: Emmanuel
+       covered 1.40013 km in exactly 180 seconds, a true average of 28.0 km/h,
+       while the speed field read 40 falling to 22 over the same window and
+       Nick, reading the car, called out numbers averaging 30.3. Had the field
+       been mph the true speed would have been about 50 km/h, so that is out by
+       a factor of 1.8.
+
+       The field follows the CAR'S DISPLAY UNITS, which is also what the range
+       sensor does, so labelling it with the range sensor's unit and doing no
+       arithmetic is right in both metric and imperial installs. */
     _speedFrom(raw) {
-      const mph = Number(raw);
-      if (!isFinite(mph) || mph <= 0) return null;
-      const unit = String(this._unit("range", "km")).toLowerCase();
-      const metric = unit.indexOf("mi") !== 0;
-      return Math.round(metric ? mph * 1.609344 : mph) + (metric ? " km/h" : " mph");
+      const v = Number(raw);
+      if (!isFinite(v) || v <= 0) return null;
+      return Math.round(v) + (this._imperial() ? " mph" : " km/h");
+    }
+    _imperial() {
+      return String(this._unit("range", "km")).toLowerCase().indexOf("mi") === 0;
     }
     _steerEnt() { return this._st("steering_heat_sel") || this._st("steering_heat"); }
     _steeringOn() {
@@ -2322,7 +2341,7 @@
          sensor is using. Speed was zero on every car available while this
          was written, so the conversion is reasoned, not measured - the one
          number on this screen I have not seen the car produce. */
-      const sp = this._speed() || (demo ? this._speedFrom(DEMO_SPEED_MPH) : null);
+      const sp = this._speed() || (demo ? this._speedFrom(DEMO_SPEED) : null);
       if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
       /* Built here rather than in _build so the animation speed can follow
