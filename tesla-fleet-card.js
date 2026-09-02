@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.1";
+  const CARD_VERSION = "1.1.2";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -22,7 +22,10 @@
     charge_limit: "number.{p}charge_limit",
     charging_amps: "number.{p}charging_amps",
     charger_switch: "switch.{p}charger",
-    charger_voltage: "sensor.{p}charger_voltage",
+    /* tesla_custom exposes no charger-voltage entity at all, so this pattern
+       never matched for any user. tesla_fleet does have one, so the key stays
+       in both maps and only this side is blank. */
+    charger_voltage: "",
     seat_fl: "select.{p}heated_seat_left",
     seat_fr: "select.{p}heated_seat_right",
     seat_rl: "select.{p}heated_seat_rear_left",
@@ -127,6 +130,19 @@
     { model: "Model 3", paint: "grey", dir: "models/3/grey/app" }
   ];
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
+
+  /* Stable, key-order-independent serialisation. Used only to tell whether a
+     config we have been handed differs from the one we already hold: Home
+     Assistant may echo the same config back with its keys reordered, so a
+     plain JSON.stringify comparison is not reliable. */
+  function stableStr(v) {
+    if (Array.isArray(v)) return "[" + v.map(stableStr).join(",") + "]";
+    if (v && typeof v === "object") {
+      return "{" + Object.keys(v).sort().map((k) =>
+        JSON.stringify(k) + ":" + stableStr(v[k])).join(",") + "}";
+    }
+    return JSON.stringify(v === undefined ? null : v);
+  }
 
   function esc(v) {
     return String(v == null ? "" : v).replace(/[&<>"]/g, (m) =>
@@ -450,15 +466,27 @@
       if (!this._config) return;
       this._cars.forEach((car) => {
         if (car._detected) return;
-        const p = car.prefix || "";
-        let integ = "";
-        if (hass.states["sensor." + p + "battery"]) integ = "tesla_custom";
-        else if (hass.states["sensor." + p + "battery_level"]) integ = "tesla_fleet";
-        if (integ) {
-          car._integration = integ;
-          car._entities = resolveEntities(car, integ);
-          car._detected = true;
-          if (car === this._car) this._built = false;   // rebuild with the right entities
+        const raw = car.prefix || "";
+        /* Leaving the trailing underscore off the prefix is the most common
+           setup mistake there is (issue #1: "grande_bianco" for entities named
+           grande_bianco_*). The README says to include it and the on-card
+           diagnostic says so too, and people still trip over it, so try the
+           corrected form as well and adopt it silently if that is what
+           matches. Only the in-memory car is touched, never the saved config. */
+        const tries = raw && !/_$/.test(raw) ? [raw, raw + "_"] : [raw];
+        for (let t = 0; t < tries.length; t++) {
+          const p = tries[t];
+          let integ = "";
+          if (hass.states["sensor." + p + "battery"]) integ = "tesla_custom";
+          else if (hass.states["sensor." + p + "battery_level"]) integ = "tesla_fleet";
+          if (integ) {
+            car.prefix = p;
+            car._integration = integ;
+            car._entities = resolveEntities(car, integ);
+            car._detected = true;
+            if (car === this._car) this._built = false;   // rebuild with the right entities
+            break;
+          }
         }
       });
       this._cars.forEach((car) => this._probeImages(car));
@@ -2008,11 +2036,21 @@
 
   class TeslaFleetCardEditor extends HTMLElement {
     setConfig(config) {
+      const prev = this._config && this._config.cars;
       this._config = JSON.parse(JSON.stringify(config || {}));
       if (!Array.isArray(this._config.cars) || !this._config.cars.length) {
         this._config.cars = [{ name: "My Tesla", model: PACK_DEFAULT.model,
                                paint: PACK_DEFAULT.paint, prefix: "" }];
       }
+      /* issue #1, the half that was missed in v1.1.0. Home Assistant feeds the
+         config straight back into setConfig after every change the editor
+         emits, and _render() replaces the whole shadow root - so that echo
+         destroyed the very input being typed into and dropped focus, which
+         reads as the editor jumping back to the first car. The DOM already
+         matches a config we produced ourselves, so re-render only when the
+         cars genuinely differ (first load, or an edit made in YAML). */
+      if (this._rendered && stableStr(prev) === stableStr(this._config.cars)) return;
+      this._rendered = true;
       this._render();
     }
     set hass(hass) { this._hass = hass; }
@@ -2038,7 +2076,7 @@
             ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "-"}</option>`).join("")}
           </select></label>
           <label>Entity prefix <input data-i="${i}" data-k="prefix" value="${c.prefix || ""}" placeholder="e.g. buddy_"></label>
-          <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey) and tints the drawn fallback art. The integration is auto-detected from the prefix. Advanced options - custom images, tap anchors, integration override, entity overrides - live in YAML (Show code editor); see the README.</div>
+          <div class="hint">Paint picks the image pack (e.g. Model&nbsp;3 + grey &rarr; models/3/grey). The integration is auto-detected from the prefix, and a missing trailing underscore is corrected for you. Advanced options - custom images, tap anchors, integration override, entity overrides - live in YAML (Show code editor); see the README.</div>
         </div>`;
       });
       html += `<button class="add" id="add">+ Add car</button></div>`;
