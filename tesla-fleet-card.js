@@ -272,14 +272,31 @@
      x-axis with y downward. rear: [cx, cy, scale] - it borrows the front's
      shape and lean, scaled. lift: the rear's brightness relative to the
      front. Fitted on the FRONT wheel only, which is the one that sits against
-     bright bodywork and so masks cleanly. */
+     bright bodywork and so masks cleanly.
+
+     The rear centre and scale are then found by TEMPLATE MATCHING: warp the
+     front wheel's own pixels over the rear at each candidate centre, scale
+     and rotation, and keep the best normalised cross-correlation. That is the
+     right tool here because it uses every pixel of the wheel rather than a
+     threshold, it is untroubled by the low contrast that defeated masking,
+     and it measures exactly what the rendering does. It scores 0.78 on the
+     red Y and 0.84 on the Model 3, which is a firm match, and 0.57 on the
+     white Y, whose flat aero covers carry less structure to match.
+
+     The method was validated before it was trusted. Nick had confirmed that
+     the white Y's rear wheel sat correctly and the other two did not ("The
+     white one is the correct position! use that!"), so the matcher was run on
+     the white one first: it moved that centre by a tenth of a view unit,
+     while shifting the other two by up to 2.7. Agreeing with the known-good
+     case is what makes the other two answers worth believing. Eyeballing had
+     by that point produced three different verdicts on the same wheel. */
   const PACK_WHEELS = {
     "models/y/red/app":   { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
-                            rear: [187.9, 45.8, 0.90] },
+                            rear: [185.2, 47.8, 0.85] },
     "models/y/white/app": { lift: 1.11, front: [108.8, 91.7, 12.27, 8.19, 113.4],
-                            rear: [192.4, 59.1, 0.90] },
+                            rear: [192.4, 59.0, 0.82] },
     "models/3/grey/app":  { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
-                            rear: [188.2, 50.0, 0.90] }
+                            rear: [187.8, 50.7, 0.86] }
   };
 
   /* expand rear: [cx, cy, scale] into a full ellipse using the front's shape */
