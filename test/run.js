@@ -267,6 +267,12 @@ function customStates(p) {
       { wheels: null, road: null,
         image_side: "/local/Tesla/models/y/red/app/side.jpg?v=1" }));
     /* speed tiers: below 20 km/h the road runs at 1.7s, above it doubles */
+    /* a car in gear but stopped keeps its road and loses the motion */
+    R.tier_still = driveState(driveCard("D", 0));
+    /* a car whose speed cannot be read must NOT freeze: it falls back to
+       moving, or the road would strand mid-slide on any integration that
+       does not report a speed at all */
+    R.tier_no_speed = driveState(driveCard("D", null));
     R.tier_slow = driveState(driveCard("D", 12)).cycle;   /* 12 km/h */
     R.tier_fast = driveState(driveCard("D", 56)).cycle;   /* 56 km/h, Patsy's */
     R.tier_slow_wheel = driveState(driveCard("D", 12)).wheelDur;
@@ -464,6 +470,12 @@ function customStates(p) {
   check("both wheels share an axis ratio", r.drive_drive.clipGeom[0][1], r.drive_drive.clipGeom[1][1]);
   check("both wheels share a lean",
     r.drive_drive.clipGeom[0][0].split(" ")[0], r.drive_drive.clipGeom[1][0].split(" ")[0]);
+  check("stopped in gear keeps the road",  r.tier_still.lines, 1);
+  check("stopped in gear keeps wheels",    r.tier_still.wheelClips, 2);
+  check("but nothing moves",               [r.tier_still.slides, r.tier_still.spinners], [0, 0]);
+  check("and a stopped wheel is sharp, not blurred",
+    r.tier_still.clipGeom.length, 2);
+  check("unknown speed still animates",    r.tier_no_speed.slides, 1);
   check("under 20km/h the road is calm",   r.tier_slow, "1.7s");
   check("over 20km/h the road doubles",    r.tier_fast, "0.85s");
   check("the wheel/road ratio is tier-free",

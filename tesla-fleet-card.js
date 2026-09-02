@@ -371,15 +371,19 @@
     /* innermost: un-squash src's ellipse to a true circle about its hub */
     const inn = `rotate(${sp}) scale(1 ${(sa / sb).toFixed(4)}) rotate(${-sp})` +
                 ` translate(${-sx} ${-sy})`;
-    const n = Math.max(1, WHEEL.copies | 0);
+    /* A stopped wheel is SHARP: the three offset copies exist to make a motion
+       blur, and there is no motion to blur, so a standstill gets one copy at
+       full opacity and no rotation. */
+    const moving = dur > 0;
+    const n = moving ? Math.max(1, WHEEL.copies | 0) : 1;
     let layers = "";
     for (let i = 0; i < n; i++) {
       const off = n === 1 ? 0 : -WHEEL.spread / 2 + WHEEL.spread * i / (n - 1);
       layers += `<g transform="${out}" opacity="${(1 / n).toFixed(3)}">
         <g transform="rotate(${off.toFixed(2)})">
-          <animateTransform attributeName="transform" type="rotate"
+          ${moving ? `<animateTransform attributeName="transform" type="rotate"
             from="${off.toFixed(2)}" to="${(off - 360).toFixed(2)}"
-            dur="${dur}s" repeatCount="indefinite"/>
+            dur="${dur}s" repeatCount="indefinite"/>` : ""}
           <g transform="${inn}"${lift ? ` filter="url(#dwLift)"` : ""}>
             <use href="#dwImg"/>
           </g>
@@ -413,7 +417,7 @@
   }
 
   function driveWheels(wheels, src, dur) {
-    if (!wheels || !wheels.front || !wheels.rear || !src || !(dur > 0)) return "";
+    if (!wheels || !wheels.front || !wheels.rear || !src) return "";
     const lift = wheels.lift || 1;
     return `<defs>
       <image id="dwImg" href="${src}" x="0" y="0" width="233" height="108" preserveAspectRatio="none"/>
@@ -453,12 +457,18 @@
       const cy = ln[0];
       const sw = Math.max(0.8, ln[1] || cw * DRIVE.width);
       const off = i * period * 0.37;
+      /* cycle 0 draws the marking without moving it: a car stopped at a
+         junction is still in gear and still on a road, so the road stays and
+         the motion goes. Nick: "At 0, the animation should stop." */
+      const anim = cycle > 0
+        ? `<animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
+                 to="${(off - period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>`
+        : "";
       return `<line x1="${(cx - dx * len / 2).toFixed(1)}" y1="${(cy - dy * len / 2).toFixed(1)}"
             x2="${(cx + dx * len / 2).toFixed(1)}" y2="${(cy + dy * len / 2).toFixed(1)}"
             stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
-            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">
-        <animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
-                 to="${(off - period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>
+            stroke-dashoffset="${off.toFixed(1)}"
+            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">${anim}
       </line>`;
     }).join("");
   }
@@ -984,13 +994,20 @@
     /* Speed in km/h whatever the car displays, for choosing the animation
        tier. Kept apart from _speed(), which formats it for the eye. */
     /* km/h whatever the car displays, so the tier threshold is a real speed
-       rather than 20 of whichever unit happens to be configured */
+       rather than 20 of whichever unit happens to be configured.
+
+       Returns 0 for a car that is genuinely stopped and null only when the
+       speed is not available at all. The difference matters: a stopped car
+       freezes the animation, a car whose speed we cannot read falls back to
+       moving, because guessing "stopped" would strand the road mid-slide on
+       any integration that does not report speed. */
     _speedKph() {
       const t = this._st("location");
       let raw = t && t.attributes ? t.attributes.speed : null;
       if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED;
+      if (raw === null || raw === undefined || raw === "") return null;
       const v = Number(raw);
-      if (!isFinite(v) || v <= 0) return null;
+      if (!isFinite(v) || v < 0) return null;
       return this._imperial() ? v * 1.609344 : v;
     }
     _demoDrive() {
@@ -2351,23 +2368,31 @@
          also stops six copies of the pack photo animating out of sight. */
       const dOvl = q("driveOvl");
       if (dOvl) {
-        const tier = moving ? ((this._speedKph() || 0) >= DRIVE.fastAbove ? "fast" : "slow") : "off";
+        /* "still" is a car in gear that is not moving - stopped at a junction.
+           It keeps its road and its wheels and loses the motion, because a
+           sliding road under a stationary car is the thing Nick spotted:
+           "At 0, the animation should stop." */
+        const kph = this._speedKph();
+        const tier = !moving ? "off"
+          : kph === 0 ? "still"
+          : (kph === null ? DRIVE.fastAbove : kph) >= DRIVE.fastAbove ? "fast" : "slow";
         if (tier !== this._driveTier) {
           this._driveTier = tier;
           if (tier === "off") dOvl.innerHTML = "";
           else {
             const dsrc = dOvl.getAttribute("data-src") || "";
             const dsfx = dOvl.getAttribute("data-sfx") || "Rest";
-            const fast = tier === "fast";
             const rd = this._road(dsrc);
             const own = rd && rd.cycle;
-            const cyc = fast ? (own ? own / 2 : DRIVE.fastCycle) : (own || DRIVE.cycle);
+            const cyc = tier === "still" ? 0
+              : tier === "fast" ? (own ? own / 2 : DRIVE.fastCycle)
+              : (own || DRIVE.cycle);
             const box = this._carBox(dsrc, dsfx);
             const cwv = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : 233 * 0.71;
             const wh = this._wheels(dsrc);
-            const wdur = wheelPeriod(wh, cwv, cyc, rd && rd.angle);
+            const wdur = cyc > 0 ? wheelPeriod(wh, cwv, cyc, rd && rd.angle) : 0;
             dOvl.innerHTML =
-              driveRoad(233, 108, box, rd, +cyc.toFixed(3)) +
+              driveRoad(233, 108, box, rd, cyc > 0 ? +cyc.toFixed(3) : 0) +
               driveWheels(wh, dsrc, wdur ? +wdur.toFixed(3) : 0);
           }
         }
