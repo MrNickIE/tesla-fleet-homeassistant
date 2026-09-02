@@ -117,7 +117,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", wheels: null, road: null, entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -150,7 +150,12 @@
      lane marking is in shot and the wheels get a swept arc drawn over them
      rather than real rotation. */
   const DRIVE = {
-    cycle: 0.833,          // seconds per dash period
+    /* The app runs 0.833s per dash period, so a marking sweeps past every
+       0.83s. Measured, and wrong here: on a card a fraction of a phone
+       screen's size that reads as frantic, which is what Nick called it. At
+       1.7s a marking passes about every second and a half and it settles
+       down. A road spec can override with its own cycle. */
+    cycle: 1.7,            // seconds per dash period
     dash: 1 / 3,           // fraction of the period that is painted
     colour: "#2b2a2b",
     /* The app's dash period is 0.86 car widths, which in its wide framing
@@ -197,15 +202,6 @@
      packs, so it stands in for the ground, and -21.8 is what they agree on. */
   const ROAD_DEFAULT = { angle: -21.8, drops: [[9, 2.2]] };
 
-  /* Wheel hubs [cx, cy, r] in Rest view units, off the same grids. The photos
-     show each wheel as an ellipse; r is the mean of the two axes, which is
-     what a circular sweep drawn over it wants. */
-  const PACK_WHEELS = {
-    "models/y/red/app":   [[107, 77.5, 11.5], [187.5, 48, 9]],
-    "models/y/white/app": [[112.5, 86.5, 12.5], [196, 59, 9.5]],
-    "models/3/grey/app":  [[110, 83, 10.5], [191.5, 52.5, 9]]
-  };
-
   /* Dashed lane markings sliding along their own axis. The slide is
      stroke-dashoffset rather than a transform, so the dashes travel along
      the line instead of the whole line drifting across the frame. */
@@ -231,33 +227,8 @@
             stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
             stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">
         <animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
-                 to="${(off - period).toFixed(1)}" dur="${DRIVE.cycle}s" repeatCount="indefinite"/>
+                 to="${(off - period).toFixed(1)}" dur="${(road.cycle || DRIVE.cycle)}s" repeatCount="indefinite"/>
       </line>`;
-    }).join("");
-  }
-
-  /* A photograph's wheels cannot turn, so this is a swept arc over each hub
-     rather than real rotation: short strokes on the rim spinning the way the
-     app's wheels spin - counter-clockwise for a car facing left. Drawn only
-     where we actually measured the hubs, because guessing them on somebody
-     else's pack photo looks worse than drawing nothing at all. */
-  function driveWheels(wheels) {
-    if (!wheels || !wheels.length) return "";
-    return wheels.map((wh) => {
-      const [cx, cy, r] = wh;
-      if (!(r > 0)) return "";
-      const arc = (a0, a1, rr, op) => {
-        const p = (a) => [cx + rr * Math.cos(a * Math.PI / 180),
-                          cy + rr * Math.sin(a * Math.PI / 180)];
-        const [ax, ay] = p(a0), [bx, by] = p(a1);
-        return `<path d="M ${ax.toFixed(2)} ${ay.toFixed(2)} A ${rr.toFixed(2)} ${rr.toFixed(2)} 0 0 1 ${bx.toFixed(2)} ${by.toFixed(2)}"
-              fill="none" stroke="#c9ced6" stroke-opacity="${op}" stroke-width="${(r * 0.14).toFixed(2)}"
-              stroke-linecap="round"/>`;
-      };
-      return `<g>${arc(-40, 22, r * 0.74, 0.26)}${arc(140, 202, r * 0.74, 0.26)}` +
-        `${arc(60, 100, r * 0.46, 0.15)}${arc(240, 280, r * 0.46, 0.15)}` +
-        `<animateTransform attributeName="transform" type="rotate" from="0 ${cx} ${cy}"` +
-        ` to="-360 ${cx} ${cy}" dur="0.62s" repeatCount="indefinite"/></g>`;
     }).join("");
   }
 
@@ -746,29 +717,15 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
-    /* Wheel hubs for the driving sweep. A user pack gets nothing unless the
-       config says where its wheels are - the bundled packs are the only ones
-       whose geometry we actually measured. drive_motion: off turns it off,
-       on forces it, auto (the default) means "only if we know the wheels". */
-    /* the ground plane for the photo we are actually showing */
+    /* The ground plane for the photo we are actually showing.
+       drive_motion: off suppresses the moving road altogether. */
     _road() {
+      if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
       const cfg = this._car.road;
       if (cfg && typeof cfg === "object" && cfg.lines) return cfg;
       const dir = String(this._car.images || this._car._autoBase || "");
       const hit = Object.keys(PACK_ROAD).filter((k) => dir.indexOf(k) >= 0)[0];
       return hit ? PACK_ROAD[hit] : ROAD_DEFAULT;
-    }
-    _wheels() {
-      const m = String(this._car.drive_motion || "auto").toLowerCase();
-      if (m === "off") return null;
-      const cfg = this._car.wheels;
-      if (Array.isArray(cfg) && cfg.length) {
-        return cfg.map((w) => (Array.isArray(w) ? w : String(w).split(",")).map(Number))
-                  .filter((w) => w.length === 3 && w.every((n) => isFinite(n)));
-      }
-      const dir = String(this._car.images || this._car._autoBase || "");
-      const hit = Object.keys(PACK_WHEELS).filter((k) => dir.indexOf(k) >= 0)[0];
-      return hit ? PACK_WHEELS[hit] : null;
     }
     _carBox(url, sfx) {
       if (!url) return DF_CALIB[sfx];
@@ -1634,7 +1591,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels())}</svg>
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1650,7 +1607,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels())}</svg>
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
