@@ -364,25 +364,8 @@ function customStates(p) {
       const roadSpeed = Math.max(8, cw * 0.45) / parseFloat(R.tier_fast);
       R.wheel_expected_fast = +(perRev / roadSpeed).toFixed(2);
     })();
-    /* the demo switch must be inert without its helper, and must be gone
-       before release. If this test starts failing because DEMO_DRIVE no
-       longer exists, delete the test - that is the intended end state. */
-    R.demo_switch_inert = driveState(driveCard("P", 0)).shown;
-    (() => {
-      const st = customStates("t_");
-      st["binary_sensor.t_online"].state = "on";
-      st["sensor.t_shift_state"] = { entity_id: "sensor.t_shift_state", state: "P", attributes: {} };
-      st["input_boolean.tesla_card_drive_demo"] =
-        { entity_id: "input_boolean.tesla_card_drive_demo", state: "on", attributes: {} };
-      const c = document.createElement("tesla-fleet-card");
-      document.body.appendChild(c);
-      c.setConfig({ type: "custom:tesla-fleet-card", cars: [{ name: "T", model: "Model Y",
-        paint: "red", prefix: "t_", image_side: "side.jpg" }] });
-      c.hass = { states: st };
-      const o = c.shadowRoot.getElementById("driveOvl");
-      R.demo_switch_on = o ? o.style.display !== "none" : null;
-      R.demo_switch_sub = c.shadowRoot.getElementById("sub").textContent;
-    })();
+    /* a pack may carry its own reference cycle, which drive_speed then scales.
+       0.86 at 40 km/h, driven at 42, so 0.86 * 40/42. */
     R.drive_cycle_override = driveState(driveCard("D", 42,
       { road: { angle: -21.9, cycle: 0.86, lines: [[93.3, 2.2]] } })).cycle;
     /* miles stay miles */
@@ -591,9 +574,6 @@ function customStates(p) {
   check("an unmeasured pack gets none",    r.drive_unmeasured_pack, 0);
   check("a pack is found from image_side", r.pack_from_image_side.spinners, 6);
   check("and its road marking is on show", r.pack_from_image_side.lines, 1);
-  check("the demo switch is inert by default", r.demo_switch_inert, false);
-  check("the demo switch forces driving",  r.demo_switch_on, true);
-  check("the demo speed is invented",      r.demo_switch_sub, "68 km/h");
 
   console.log("\nthe running mode on the home view");
   check("nothing added when the mode is normal", r.home_normal, "Parked");

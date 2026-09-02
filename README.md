@@ -201,16 +201,53 @@ used to tell a car that has Bioweapon Defense Mode from one that does not. The
 card falls back to the model instead: the mode needs a HEPA filter, which Model
 S, X and Y carry and Model 3 does not, so the button is hidden on a Model 3.
 
-The year matters too, and the card cannot see it. Model Y was built without the
-filter until Tesla added it to the production line in June 2021, and Model S and
-X only got it from 2016. Both are retrofittable. So:
+The year matters too, and the card can see it. Model Y was built without the
+filter until Tesla added it to the production line in June 2021, and Model S
+and X only got it from 2016, so the card reads the model year from the VIN and
+hides the button on a car too old to have had one. The VIN comes from the car's
+own entity attributes; there is nothing to configure.
 
-- a 2020 or early-2021 Model Y wants `hide_climate: [bio]`
-- a pre-2016 Model S or X wants `hide_climate: [bio]`
-- any car with a retrofitted filter wants `show_climate: [bio]`
+Both are retrofittable and the card cannot know that, so a car with a
+retrofitted filter wants `show_climate: [bio]`. `hide_climate: [bio]` still
+removes the button from any car.
 
-Nothing in the integration exposes a build year or a VIN today, which is why
-this is config rather than detection.
+## The driving view
+
+Put the car in gear and the resting photo gets a road: a lane marking sliding
+underneath, the wheels turning, and the car's speed where the "Parked 2h" timer
+usually sits.
+
+It is all measured off a screen recording of the Tesla app rather than
+invented. The markings run parallel to the car's own wheelbase, which is why
+each image pack carries the angle its photo was shot at. The wheels turn by
+rotating the photograph's own pixels, clipped to each hub and un-squashed to a
+circle first, so the spokes that move are the real ones. The rear wheel borrows
+the front's pixels, because it is the same wheel and is drawn too small to
+resample well on its own.
+
+The animation is proportional to the car's actual speed: double the speed and
+the road and wheels both double. `drive_speed` scales the overall pace if it
+feels wrong on your screen. At a standstill in gear the road and wheels stay
+drawn and stop moving, and the wheels render sharp, because the motion blur
+only exists to smear motion. `drive_motion: off` on a car turns the whole thing
+off.
+
+Wheel geometry was measured for the three bundled packs only. A pack we have
+not measured gets a road but still wheels, because a wrong ellipse wobbles and
+that looks worse than not moving. `wheels:` and `road:` let you supply your own.
+
+**Speed comes from the `device_tracker` entity's `speed` attribute**, in
+whatever units the car itself displays, so the card does no conversion and
+labels it from the range sensor. Tesla Custom reports it as `null` rather than
+`0` on a parked car.
+
+**The speed is only as fresh as your polling.** Tesla Custom polls every
+`scan_interval` seconds while a car is in Drive or Reverse, so at the default of
+60 the number on the card can be a minute old. Lowering `scan_interval`
+globally is a bad trade, because a parked car with sentry mode on then gets
+polled just as hard and that costs range. Better is an automation that calls
+`tesla_custom.polling_interval` with the driving car's VIN and a shorter
+interval, and restores it when the car parks.
 
 ## Updating
 
@@ -260,8 +297,10 @@ npm install
 npm test
 ```
 
-22 checks covering entity detection on both integrations, the per-car entity
-overrides, and the editor. It exits non-zero on failure.
+95 checks covering entity detection on both integrations, the per-car entity
+overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
+and year, and the driving view including the geometry that keeps the wheels
+rolling at the same speed as the road. It exits non-zero on failure.
 
 It is worth knowing why it exists. In v1.1.0 a reported bug ("the editor keeps
 reverting to the first vehicle") was diagnosed by reading the code, declared
@@ -272,7 +311,9 @@ changing detection or the editor, run it.
 
 ## Contributing an image pack
 
-A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`:
+A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`
+(or a generation-qualified folder such as `images/models/3-classic/grey/app/`;
+see [Body generations](#body-generations)):
 
 `topdown.jpg` · `topdown-plugged.jpg` · `topdown-charging.jpg` · `side.jpg` · `side-plugged.jpg` · `side-charging.jpg` · `climate.jpg`
 

@@ -8,24 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.4-test.2";
-
-  /* ---- DEMO SWITCH: REMOVE BEFORE ANY RELEASE ------------------------
-     Nick asked to see the driving view on his own dashboard without
-     waiting to be in a car. While this input_boolean is on, every car
-     renders as if it were driving. It is deliberately a helper entity
-     rather than a config key so that looking at it costs no dashboard
-     edit and turning it off is one tap.
-
-     The speed shown while it is on is INVENTED, because a parked car
-     reports zero. That is the one thing here that is not real data,
-     which is reason enough that this must not reach a release: a card
-     that can be told to lie about whether a car is moving has no
-     business in anybody else's install. The test suite asserts it is
-     inert when the helper is absent, but the only correct fix is to
-     delete this block and the two references to it. */
-  const DEMO_DRIVE = "input_boolean.tesla_card_drive_demo";
-  const DEMO_SPEED = 68;     // in the car's display units
+  const CARD_VERSION = "1.1.4";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -1129,8 +1112,7 @@
     _speedKph() {
       const t = this._st("location");
       const at = t && t.attributes;
-      let raw = at && ("speed" in at) ? at.speed : undefined;
-      if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED;
+      const raw = at && ("speed" in at) ? at.speed : undefined;
       /* tesla_custom reports speed as NULL on a parked car, not 0, checked on
          Emmanuel the moment he parked. So a null that is present means "not
          moving"; only a missing key means "this integration does not tell us",
@@ -1140,10 +1122,6 @@
       const v = Number(raw);
       if (!isFinite(v) || v < 0) return 0;
       return this._imperial() ? v * 1.609344 : v;
-    }
-    _demoDrive() {
-      return !!(this._hass && this._hass.states && this._hass.states[DEMO_DRIVE] &&
-                this._hass.states[DEMO_DRIVE].state === "on");
     }
     _carBox(url, sfx) {
       if (!url) return DF_CALIB[sfx];
@@ -2482,9 +2460,6 @@
       else if (asleep) { status = "Asleep"; durKey = "asleep"; }
       else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
-      /* DEMO SWITCH - see DEMO_DRIVE above. Remove before release. */
-      const demo = this._demoDrive();
-      if (demo) { status = "Driving"; durKey = "shift"; }
       const moving = status === "Driving";
       const durS = this._st(durKey);
       const dur = durS ? relDur(durS.last_changed) : "";
@@ -2510,7 +2485,7 @@
          sensor is using. Speed was zero on every car available while this
          was written, so the conversion is reasoned, not measured - the one
          number on this screen I have not seen the car produce. */
-      const sp = this._speed() || (demo ? this._speedFrom(DEMO_SPEED) : null);
+      const sp = this._speed();
       if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
       /* Built here rather than in _build so the animation speed can follow
