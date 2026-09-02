@@ -209,6 +209,31 @@ function customStates(p) {
     R.bio_y_2020_retrofit = hasBio(climModel("Model Y", { show_climate: ["bio"] },
       "LRWYHCEKXLC730074"));
     R.bio_x_2014 = hasBio(climModel("Model X", null, "5YJXCDE24FF000001")); /* F = 2015 */
+    /* pack generations. The two Model Y packs are different cars: red is
+       pre-refresh, white is the 2025 Juniper. */
+    const genOf = (model, vin, extra) => {
+      const c = climModel(model, extra, vin);
+      return c._generation();
+    };
+    R.gen_y_2023 = genOf("Model Y", "LRWYHCEKXPC730074");   /* P = 2023 */
+    R.gen_y_2026 = genOf("Model Y", "LRWYHCEKXTC730074");   /* T = 2026 */
+    R.gen_3_2024 = genOf("Model 3", "LRW3F7FS5RC043917");   /* R = 2024 */
+    R.gen_3_2022 = genOf("Model 3", "LRW3F7FR3NC609256");   /* N = 2022 */
+    R.gen_3_2023 = genOf("Model 3", "LRW3F7FS4PC762296");   /* P = 2023 */
+    R.gen_override = genOf("Model Y", "LRWYHCEKXPC730074", { generation: "juniper" });
+    /* a pre-refresh Model Y pointed at the white Juniper pack must say so */
+    (() => {
+      const c = climModel("Model Y", { images: "models/y/white/app" }, "LRWYHCEKXPC730074");
+      c._view = ""; c._built = false; c.hass = c._hass;
+      const im = c.shadowRoot.getElementById("restImg");
+      R.gen_mismatch_title = im ? im.title : "(no image)";
+    })();
+    (() => {
+      const c = climModel("Model Y", { images: "models/y/red/app" }, "LRWYHCEKXPC730074");
+      c._view = ""; c._built = false; c.hass = c._hass;
+      const im = c.shadowRoot.getElementById("restImg");
+      R.gen_match_title = im ? im.title : "(no image)";
+    })();
     /* the year is decoded and shown, and the VIN is a tooltip not a label */
     (() => {
       const c = climModel("Model 3", null, "LRW3F7FS5RC043917");  /* R = 2024 */
@@ -498,6 +523,17 @@ function customStates(p) {
   check("the VIN is a tooltip, not a label",
     [r.foot_vin_title, r.foot_year.indexOf("LRW") >= 0], ["LRW3F7FS5RC043917", false]);
   check("show_vin puts it inline",         r.foot_vin_inline.indexOf("LRW3F7FS5RC043917") > 0, true);
+  console.log("\npack generations");
+  check("Model Y 2023 is pre-refresh",     r.gen_y_2023, "classic");
+  check("Model Y 2026 is Juniper",         r.gen_y_2026, "juniper");
+  check("Model 3 2024 is Highland",        r.gen_3_2024, "highland");
+  check("Model 3 2022 is not",             r.gen_3_2022, "classic");
+  /* Highland reached North America in January 2024, so a 2023 Model 3 could be
+     either car. Guessing would serve the wrong bodywork with confidence. */
+  check("Model 3 2023 refuses to guess",   r.gen_3_2023, null);
+  check("config beats the VIN",            r.gen_override, "juniper");
+  check("a mismatch is named on the image", r.gen_mismatch_title.indexOf("Juniper") >= 0, true);
+  check("a matching pack says nothing",    r.gen_match_title, "");
   check("every mode button is centred",
     r.mode_buttons_centred.filter((a) => a !== "center"), []);
 

@@ -529,11 +529,25 @@
      lists these when a car has no pack of its own, so nobody is left guessing
      what exists - and so an unsupported combination is a nudge to build one
      rather than a dead end. */
+  /* Packs that ship with the repo. `gen` matters and was missing: the two
+     Model Y packs are DIFFERENT GENERATIONS - the red is the pre-refresh car
+     and the white is the 2025 refresh, "Juniper" - and with model and paint as
+     the only keys, a pre-refresh white Y was being handed Juniper bodywork and
+     a Juniper red Y the old shape, silently. Nick spotted it from the images.
+
+     Recording the generation does three things: a contributed pack at a
+     generation-qualified path is now preferred automatically, the card can say
+     when it is showing the wrong one, and the README can be honest about it.
+     The fallback is deliberately unchanged - right colour, wrong bodywork -
+     because paint is what the user actually configured and a wrong colour is
+     the more jarring of the two. */
   const PACKS_SHIPPED = [
-    { model: "Model Y", paint: "red", dir: "models/y/red/app" },
-    { model: "Model Y", paint: "white", dir: "models/y/white/app" },
-    { model: "Model 3", paint: "grey", dir: "models/3/grey/app" }
+    { model: "Model Y", paint: "red", dir: "models/y/red/app", gen: "classic" },
+    { model: "Model Y", paint: "white", dir: "models/y/white/app", gen: "juniper" },
+    { model: "Model 3", paint: "grey", dir: "models/3/grey/app", gen: "highland" }
   ];
+  const GEN_LABEL = { classic: "pre-refresh", juniper: "Juniper (2025 refresh)",
+                      highland: "Highland (2024 refresh)" };
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
 
   /* Stable, key-order-independent serialisation. Used only to tell whether a
@@ -1026,6 +1040,45 @@
       }
       return car._vin;
     }
+    /* Which body generation this car is, for picking a pack. From config if
+       given, otherwise from the VIN's model year, and ONLY where that mapping
+       is unambiguous.
+
+       Model Y is clean: Tesla brands the 2025-built Juniper as a 2026 model, so
+       VIN position 10 of T or later is Juniper and S or earlier is pre-refresh.
+       Model 3 is not: Highland reached North America in January 2024, so 2024
+       and later is Highland and 2022 and earlier is not, but a 2023 could be
+       either and this returns null rather than guessing. A null simply means
+       "no generation preference", which is the behaviour that existed before. */
+    _generation() {
+      const cfg = String(this._car.generation || this._car.gen || "").toLowerCase();
+      if (cfg) return cfg;
+      const yr = this._year();
+      if (!yr) return null;
+      const m = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
+      if (m.indexOf("modely") >= 0 || m === "y") return yr >= 2026 ? "juniper" : "classic";
+      if (m.indexOf("model3") >= 0 || m === "3") {
+        if (yr >= 2024) return "highland";
+        if (yr <= 2022) return "classic";
+        return null;                       /* 2023 is genuinely ambiguous */
+      }
+      return null;
+    }
+    /* the generation of the pack actually on screen, where we know it */
+    _packGen() {
+      const dir = String(this._car.images || this._car._autoBase || "");
+      if (!dir) return null;
+      for (let i = 0; i < PACKS_SHIPPED.length; i++) {
+        if (dir.indexOf(PACKS_SHIPPED[i].dir) >= 0) return PACKS_SHIPPED[i].gen || null;
+      }
+      return null;
+    }
+    /* "your car is a Juniper but these are pre-refresh photos", or null */
+    _genMismatch() {
+      const want = this._generation(), got = this._packGen();
+      if (!want || !got || want === got) return null;
+      return { want: GEN_LABEL[want] || want, got: GEN_LABEL[got] || got };
+    }
     _year() {
       const v = this._vin();
       return v ? (VIN_YEAR[v.charAt(9)] || null) : null;
@@ -1252,8 +1305,15 @@
       const roots = ["/local/tesla-fleet-card/images/",
                      "https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/",
                      "/hacsfiles/tesla-fleet-homeassistant/images/"];
+      /* A generation-qualified pack wins if one exists, so dropping
+         images/models/y-juniper/red/app into the repo or into /local is all it
+         takes to fix a Juniper red Y. The unqualified path stays as the
+         fallback, which keeps the current right-colour-wrong-bodywork
+         behaviour for anyone without a matching pack. */
+      const gen = this._generation();
       const candidates = [];
       roots.forEach((root) => {
+        if (paint && gen) candidates.push(root + "models/" + dir + "-" + gen + "/" + paint + "/app");
         if (paint) candidates.push(root + "models/" + dir + "/" + paint + "/app", root + dir + "/" + paint);
         candidates.push(root + dir, root + "models/" + dir + "/app");
       });
@@ -2346,7 +2406,8 @@
       const slug = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
       const path = "images/models/" + dir + "/" + (slug || "&lt;paint&gt;") + "/app/";
       const have = PACKS_SHIPPED.map((p) =>
-        `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}</li>`).join("");
+        `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}` +
+        (p.gen ? ` &middot; ${esc(GEN_LABEL[p.gen] || p.gen)}` : "") + `</li>`).join("");
       return `
 <div class="noPack">
   <svg class="noPackCar" viewBox="0 0 64 26" aria-hidden="true">
@@ -2773,6 +2834,17 @@
          sits in the tooltip rather than on the face of the card: it identifies
          a specific vehicle and people screenshot their dashboards. show_vin
          puts it inline for anyone who wants it there. */
+      /* If the photos are the wrong generation, say so on the image itself
+         rather than letting the card quietly show the wrong car. A tooltip
+         because the fallback is deliberate and usually fine: the alternative
+         was a banner nagging about a difference most people will not mind. */
+      const gm = this._genMismatch();
+      const rImg = q("restImg");
+      if (rImg) {
+        if (gm) rImg.title = "These photos are the " + gm.got +
+          " car; this one looks like the " + gm.want + ". Colour is matched, bodywork is not.";
+        else rImg.title = "";
+      }
       const yr = this._year();
       const vin = this._vin();
       const ident = (yr ? yr + " " : "") + (this._car.model || "");

@@ -86,7 +86,8 @@ cars:
 
 ## Images
 
-The card looks for images in this order - first hit wins:
+The card looks for images in this order - first hit wins. Generation is part
+of the match; see [Body generations](#body-generations) below.
 
 1. **Per-car options in YAML** - `image`, `image_side`, `image_charging`,
    `image_climate` and friends, each a `/local/...` path or full URL.
@@ -121,6 +122,39 @@ Make your own from your own Tesla app: screenshot the app's home screen
 biggest display you have, crop to the car, patch out the baked-in UI labels
 (the card draws live ones), save to the sizes above on `#141414`.
 
+### Body generations
+
+Tesla has refreshed both cars, and a refresh changes the bodywork enough that
+the photos do not transfer. So a pack has a generation as well as a model and
+a paint:
+
+| Pack | Car | Generation |
+| --- | --- | --- |
+| `models/y/red/app` | Model Y | pre-refresh |
+| `models/y/white/app` | Model Y | Juniper, the 2025 refresh |
+| `models/3/grey/app` | Model 3 | Highland, the 2024 refresh |
+
+The card works out which generation your car is from the model year, which it
+reads from the tenth character of the VIN. Model Y is unambiguous, because
+Tesla brands the 2025-built Juniper as a 2026 model: `T` or later is Juniper,
+`S` or earlier is pre-refresh. Model 3 is not, because Highland reached North
+America in January 2024, so 2024 and later is Highland, 2022 and earlier is
+not, and a 2023 could be either. The card does not guess at a 2023; set
+`generation: highland` or `generation: classic` on the car if you want to be
+sure.
+
+A pack at a generation-qualified path wins if one exists, so
+`models/y-juniper/red/app` in this repository or in your own
+`/config/www/tesla-fleet-card/images/` is all it takes to serve a Juniper red
+Model Y properly. **Contributions of the missing combinations are very
+welcome** - see below.
+
+If no pack matches your generation, the card falls back to one in your paint
+from the other generation: the colour is right and the bodywork is not. That
+is deliberate, because paint is the thing you configured and a wrong colour is
+the more jarring of the two mistakes, but the card is not quiet about it -
+hover the car photo and it tells you which generation you are looking at.
+
 **Controls not lining up on your images?** Set `calibrate: true` on the car,
 tap the image where each control sits, read the coordinates off the badge, and
 put them in `climate_anchors:` / `top_anchors:` (then remove `calibrate`).
@@ -146,6 +180,7 @@ Per car:
 | `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
 | `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. |
 | `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
+| `generation` | Which body generation this car is, when the model year cannot say: `classic`, `highland` or `juniper`. Only needed for a 2023 Model 3, which could be either. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
 bar), `accent`, `drive_speed`, `show_vin`.
