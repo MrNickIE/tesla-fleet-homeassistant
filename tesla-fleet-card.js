@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.3";
+  const CARD_VERSION = "1.1.4-test.1";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -117,10 +117,139 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", wheels: null, road: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
+
+  /* ---- driving view ---------------------------------------------------
+     Measured off a 60fps screen recording of the Tesla app's driving screen
+     (884x1920). Every number here came off that file rather than out of my
+     head, because the last several times I guessed at this card's visuals
+     from reading code I was wrong:
+
+       cycle        0.833 s   autocorrelation, identical at five probe points
+       dash duty    1:2       duty cycle 0.32 at every probe
+       dash colour  #2b2a2b   on a near-black ground
+       stroke       6.4px of a 488px-wide car -> 1.31% of car width
+       period       ~420px    -> 0.86 car widths between dash starts
+       wheels       rotate counter-clockwise, by polar cross-correlation at
+                    r=10..26 on both hubs
+
+     The angle is NOT a constant. In the app the road lines sit at -24.6 deg
+     and the car's own wheelbase sits at -24.1 deg: the markings run parallel
+     to the direction of travel, so they track the camera angle of whatever
+     render you are looking at. The bundled pack photo is a tighter, flatter
+     three-quarter view whose wheelbase runs at about -12.6 deg, so copying
+     the app's -24.6 across would have laid the road at a visibly wrong angle
+     on the car it is drawn under. Each pack carries its own.
+
+     What the app does and this card cannot: the app swaps to a 3D render, so
+     its wheels genuinely turn and the car sits in the middle of a wide road.
+     Our car is a photograph that nearly fills its frame, so only the near
+     lane marking is in shot and the wheels get a swept arc drawn over them
+     rather than real rotation. */
+  const DRIVE = {
+    cycle: 0.833,          // seconds per dash period
+    dash: 1 / 3,           // fraction of the period that is painted
+    colour: "#2b2a2b",
+    /* The app's dash period is 0.86 car widths, which in its wide framing
+       leaves 2.3 periods on screen. The pack photo is cropped far tighter, so
+       0.86 put ONE dash in shot and it read as a scratch on the picture
+       rather than a road. Halved, so the same number of dashes is visible as
+       the app shows - keeping the appearance rather than the constant. */
+    period: 0.45,          // dash period as a fraction of car width
+    width: 0.0131          // stroke width as a fraction of car width
+  };
+
+  /* Per-pack ground plane, in Rest view units (233 x 108), read off a 5px-
+     per-unit grid laid over each bundled photo. angle is the car's wheelbase
+     angle in that photo - front hub bottom to rear hub bottom - because the
+     app's road markings run parallel to the direction of travel and so track
+     whatever camera the render used. Each entry in lines is [y, stroke] where
+     y is the marking's height at the middle of the frame.
+
+     Absolute rather than relative to the runtime car box on purpose: that box
+     is a luma threshold that swallows the car's shadow by a different amount
+     in every photo, so it would drag the road up and down between packs.
+
+     I first read these angles off by eye as -12.6 and -33.6 and they were
+     both wrong; the three packs actually agree closely, which is the check
+     that they are right - it is one camera rig photographing three cars. */
+  const PACK_ROAD = {
+    "models/y/red/app":   { angle: -20.4, lines: [[93, 2.0], [104.5, 2.6]] },
+    "models/y/white/app": { angle: -17.9, lines: [[102, 2.0], [113.5, 2.6]] },
+    "models/3/grey/app":  { angle: -20.8, lines: [[98, 2.0], [109.5, 2.6]] }
+  };
+  /* An unmeasured photo still gets a road: the measured car box's bottom edge
+     lands within a unit or two of where the tyres meet the ground on all
+     three bundled packs, so it stands in for the baseline, and -20 is what
+     the three of them average to. */
+  const ROAD_DEFAULT = { angle: -20, drops: [[1.5, 2.0], [13, 2.6]] };
+
+  /* Wheel hubs [cx, cy, r] in Rest view units, off the same grids. The photos
+     show each wheel as an ellipse; r is the mean of the two axes, which is
+     what a circular sweep drawn over it wants. */
+  const PACK_WHEELS = {
+    "models/y/red/app":   [[107, 77.5, 11.5], [187.5, 48, 9]],
+    "models/y/white/app": [[112.5, 86.5, 12.5], [196, 59, 9.5]],
+    "models/3/grey/app":  [[110, 83, 10.5], [191.5, 52.5, 9]]
+  };
+
+  /* Dashed lane markings sliding along their own axis. The slide is
+     stroke-dashoffset rather than a transform, so the dashes travel along
+     the line instead of the whole line drifting across the frame. */
+  function driveRoad(w, h, box, road) {
+    if (!road || !((road.lines && road.lines.length) || (road.drops && road.drops.length))) return "";
+    /* the car box only sets the dash scale - one dash period is 0.86 car
+       widths, so the road keeps its proportions whatever pack is loaded */
+    const cw = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : w * 0.71;
+    const rad = (road.angle || 0) * Math.PI / 180;
+    const dx = Math.cos(rad), dy = Math.sin(rad);
+    const len = (Math.abs(w * dx) + Math.abs(h * dy)) * 2.2;
+    const period = Math.max(8, cw * DRIVE.period);
+    const on = period * DRIVE.dash;
+    const cx = w / 2;
+    const spec = road.lines ||
+      (road.drops || []).map((d) => [(box && box.length === 4 ? box[3] : h * 0.85) + d[0], d[1]]);
+    return spec.map((ln, i) => {
+      const cy = ln[0];
+      const sw = Math.max(0.8, ln[1] || cw * DRIVE.width);
+      const off = i * period * 0.37;
+      return `<line x1="${(cx - dx * len / 2).toFixed(1)}" y1="${(cy - dy * len / 2).toFixed(1)}"
+            x2="${(cx + dx * len / 2).toFixed(1)}" y2="${(cy + dy * len / 2).toFixed(1)}"
+            stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
+            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">
+        <animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
+                 to="${(off - period).toFixed(1)}" dur="${DRIVE.cycle}s" repeatCount="indefinite"/>
+      </line>`;
+    }).join("");
+  }
+
+  /* A photograph's wheels cannot turn, so this is a swept arc over each hub
+     rather than real rotation: short strokes on the rim spinning the way the
+     app's wheels spin - counter-clockwise for a car facing left. Drawn only
+     where we actually measured the hubs, because guessing them on somebody
+     else's pack photo looks worse than drawing nothing at all. */
+  function driveWheels(wheels) {
+    if (!wheels || !wheels.length) return "";
+    return wheels.map((wh) => {
+      const [cx, cy, r] = wh;
+      if (!(r > 0)) return "";
+      const arc = (a0, a1, rr, op) => {
+        const p = (a) => [cx + rr * Math.cos(a * Math.PI / 180),
+                          cy + rr * Math.sin(a * Math.PI / 180)];
+        const [ax, ay] = p(a0), [bx, by] = p(a1);
+        return `<path d="M ${ax.toFixed(2)} ${ay.toFixed(2)} A ${rr.toFixed(2)} ${rr.toFixed(2)} 0 0 1 ${bx.toFixed(2)} ${by.toFixed(2)}"
+              fill="none" stroke="#c9ced6" stroke-opacity="${op}" stroke-width="${(r * 0.14).toFixed(2)}"
+              stroke-linecap="round"/>`;
+      };
+      return `<g>${arc(-40, 22, r * 0.74, 0.26)}${arc(140, 202, r * 0.74, 0.26)}` +
+        `${arc(60, 100, r * 0.46, 0.15)}${arc(240, 280, r * 0.46, 0.15)}` +
+        `<animateTransform attributeName="transform" type="rotate" from="0 ${cx} ${cy}"` +
+        ` to="-360 ${cx} ${cy}" dur="0.62s" repeatCount="indefinite"/></g>`;
+    }).join("");
+  }
 
   const PAINT_COLORS = { red: "#a4232e", grey: "#5c5e62", gray: "#5c5e62", white: "#f2f3f5",
     black: "#171a20", blue: "#1f3a93", silver: "#c8c9cb" };
@@ -248,7 +377,7 @@
     return { mode, level: lvl === undefined ? 1 : lvl };
   }
 
-  const HEAT_COL = "#e64545", COOL_COL = "#4aa3ff", IDLE_COL = "#a9adb2";
+  const HEAT_COL = "#e43335", COOL_COL = "#385ec4", IDLE_COL = "#90908e";
 
   /* -- Defrost glow ----------------------------------------------------------
      Measured off Nick's own app screen recording (ffmpeg, 15fps sampling of a
@@ -607,6 +736,30 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
+    /* Wheel hubs for the driving sweep. A user pack gets nothing unless the
+       config says where its wheels are - the bundled packs are the only ones
+       whose geometry we actually measured. drive_motion: off turns it off,
+       on forces it, auto (the default) means "only if we know the wheels". */
+    /* the ground plane for the photo we are actually showing */
+    _road() {
+      const cfg = this._car.road;
+      if (cfg && typeof cfg === "object" && cfg.lines) return cfg;
+      const dir = String(this._car.images || this._car._autoBase || "");
+      const hit = Object.keys(PACK_ROAD).filter((k) => dir.indexOf(k) >= 0)[0];
+      return hit ? PACK_ROAD[hit] : ROAD_DEFAULT;
+    }
+    _wheels() {
+      const m = String(this._car.drive_motion || "auto").toLowerCase();
+      if (m === "off") return null;
+      const cfg = this._car.wheels;
+      if (Array.isArray(cfg) && cfg.length) {
+        return cfg.map((w) => (Array.isArray(w) ? w : String(w).split(",")).map(Number))
+                  .filter((w) => w.length === 3 && w.every((n) => isFinite(n)));
+      }
+      const dir = String(this._car.images || this._car._autoBase || "");
+      const hit = Object.keys(PACK_WHEELS).filter((k) => dir.indexOf(k) >= 0)[0];
+      return hit ? PACK_WHEELS[hit] : null;
+    }
     _carBox(url, sfx) {
       if (!url) return DF_CALIB[sfx];
       this._boxes = this._boxes || {};
@@ -677,6 +830,17 @@
     }
 
     /* prefer the level select, fall back to the plain switch */
+    /* mph off the tracker, shown in the unit the range sensor uses */
+    _speed() {
+      const t = this._st("location");
+      const raw = t && t.attributes ? t.attributes.speed : null;
+      if (raw === null || raw === undefined || raw === "") return null;
+      const mph = Number(raw);
+      if (!isFinite(mph) || mph <= 0) return null;
+      const unit = String(this._unit("range", "km")).toLowerCase();
+      const metric = unit.indexOf("mi") !== 0;
+      return Math.round(metric ? mph * 1.609344 : mph) + (metric ? " km/h" : " mph");
+    }
     _steerEnt() { return this._st("steering_heat_sel") || this._st("steering_heat"); }
     _steeringOn() {
       const s = this._steerEnt();
@@ -1459,6 +1623,8 @@
         return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels())}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1473,6 +1639,8 @@
       return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels())}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1868,6 +2036,7 @@
       else if (asleep) { status = "Asleep"; durKey = "asleep"; }
       else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
+      const moving = status === "Driving";
       const durS = this._st(durKey);
       const dur = durS ? relDur(durS.last_changed) : "";
       let subTxt = status + (dur && dur !== "just now" ? " " + dur : "");
@@ -1886,7 +2055,17 @@
       const pmode = String((climS0 && climS0.attributes.preset_mode) || "").toLowerCase();
       const MODE_LABEL = { dog: "Pet Mode", camp: "Camp Mode", keep: "Keep Climate On", defrost: "Defrosting" };
       if (MODE_LABEL[pmode]) subTxt = MODE_LABEL[pmode] + " \u00b7 " + subTxt;
+      /* Driving replaces "Parked 2h" with the speed, the way the app does.
+         Tesla reports drive_state.speed in mph regardless of the car's own
+         display units, so it is converted to match whatever unit the range
+         sensor is using. Speed was zero on every car available while this
+         was written, so the conversion is reasoned, not measured - the one
+         number on this screen I have not seen the car produce. */
+      const sp = this._speed();
+      if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
+      const dOvl = q("driveOvl");
+      if (dOvl) dOvl.style.display = moving ? "" : "none";
 
       // on-car states
       const lockS = this._st("lock");
@@ -2005,15 +2184,15 @@
       const cVent = q("climVent");
       if (cVent) cVent.classList.toggle("on", this._is("windows_cover", "open"));
       const hideSeats = (this._car.hide_seats || []).map((x) => String(x).toLowerCase());
-      /* Auto is a MODE, not a level. The app writes the word under the glyph
-         rather than implying a level, so the card does the same. The waves are
-         still coloured, because the car may well be heating right now; the
-         label is what stops Auto reading as "someone set this to maximum". */
+      /* Auto is a MODE, not a level. Measured off a screen recording of the
+         app: on Auto the waves stay grey and the word "Auto" appears under
+         the glyph. Colour means "you set this yourself" - red for heat, blue
+         for cool - and the number of coloured waves is the level. */
       const paintHeat = (id, h) => {
         const g = q(id);
         if (!g) return;
         const col = h.mode === "cool" ? COOL_COL : HEAT_COL;
-        const lit = h.mode === "auto" ? 3 : h.level;
+        const lit = h.mode === "auto" ? 0 : h.level;
         g.classList.toggle("heatOn", h.mode !== "off");
         for (let i = 0; i < 3; i++) {
           const w = q(id + "_w" + i);
@@ -2022,7 +2201,7 @@
         const at = q(id + "_auto");
         if (at) {
           at.style.display = h.mode === "auto" ? "" : "none";
-          at.setAttribute("fill", col);
+          at.setAttribute("fill", IDLE_COL);
         }
       };
       [["seatFL","seat_fl"],["seatFR","seat_fr"],["seatRL","seat_rl"],["seatRR","seat_rr"]].forEach(([id, key]) => {
@@ -2048,7 +2227,7 @@
            steps the seats, so two waves here rather than three: a real car has
            two heat steps on the wheel, not three. */
         const wCol = wh.mode === "cool" ? COOL_COL : HEAT_COL;
-        const wLit = wh.mode === "auto" ? 2 : Math.min(wh.level, 2);
+        const wLit = wh.mode === "auto" ? 0 : Math.min(wh.level, 2);
         for (let i = 0; i < 2; i++) {
           const w = q("wheelHeat_w" + i);
           if (w) w.setAttribute("stroke", i < wLit ? wCol : IDLE_COL);
@@ -2056,11 +2235,12 @@
         const wAuto = q("wheelHeat_auto");
         if (wAuto) {
           wAuto.style.display = wh.mode === "auto" ? "" : "none";
-          wAuto.setAttribute("fill", wh.mode === "cool" ? COOL_COL : HEAT_COL);
+          wAuto.setAttribute("fill", IDLE_COL);
         }
         q("wheelHeat").classList.toggle("wheelOn", whOn);
         const wIc = q("wheelHeatIcon");
         if (wIc) wIc.querySelector("path").setAttribute("fill",
+          wh.mode === "auto" ? IDLE_COL :
           whOn ? (wh.mode === "cool" ? COOL_COL : HEAT_COL) : IDLE_COL);
       }
       const dfOn = this._defrostOn();

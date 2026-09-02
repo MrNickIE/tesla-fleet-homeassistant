@@ -153,9 +153,11 @@ function customStates(p) {
       /* count only genuinely coloured waves. A MISSING element reads as null,
          and counting null as "lit" made these tests pass against the old
          version for the wrong reason. */
-      const ON = ["#e64545", "#4aa3ff"];
+      const ON = ["#e43335", "#385ec4"];
       return { lit: waves.filter((x) => ON.indexOf(x) >= 0).length,
                col: waves.find((x) => ON.indexOf(x) >= 0) || null,
+               grey: waves.every((x) => x === "#90908e"),
+               autoCol: a ? a.getAttribute("fill") : null,
                auto: a ? a.style.display !== "none" : null };
     };
     const seat = (v) => glyph(climCard({ "select.t_heated_seat_left": v }), "seatFL", 3);
@@ -169,6 +171,58 @@ function customStates(p) {
     R.wheel_high  = glyph(climCard({ "select.t_heated_steering_wheel": "High", "switch.t_heated_steering": "on" }), "wheelHeat", 2);
     R.wheel_auto  = glyph(climCard({ "select.t_heated_steering_wheel": "Auto", "switch.t_heated_steering": "off" }), "wheelHeat", 2);
     R.wheel_switchOnly = glyph(climCard({ "switch.t_heated_steering": "on" }), "wheelHeat", 2);
+
+    /* ---- the driving view ----------------------------------------------
+       The card swaps to a moving road and a speed readout when the car is in
+       gear. Geometry was measured off a screen recording of the app rather
+       than invented: see the DRIVE block in the card. */
+    const driveCard = (shift, speed, extra) => {
+      const st = customStates("t_");
+      st["binary_sensor.t_online"].state = "on";
+      st["sensor.t_shift_state"] = { entity_id: "sensor.t_shift_state", state: shift, attributes: {} };
+      st["device_tracker.t_location_tracker"] = { entity_id: "device_tracker.t_location_tracker",
+        state: "not_home", attributes: { latitude: 1, longitude: 2, speed: speed } };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [Object.assign(
+        { name: "T", model: "Model Y", paint: "red", prefix: "t_",
+          image_side: "side.jpg", wheels: [[106.5, 76.5, 13.2], [186, 51, 9]] }, extra || {})] });
+      c.hass = { states: st };
+      return c;
+    };
+    const driveState = (c) => {
+      const o = c.shadowRoot.getElementById("driveOvl");
+      const sub = c.shadowRoot.getElementById("sub");
+      return {
+        shown: o ? o.style.display !== "none" : null,
+        lines: o ? o.querySelectorAll("line").length : null,
+        wheels: o ? o.querySelectorAll("animateTransform").length : null,
+        slides: o ? o.querySelectorAll("line > animate").length : null,
+        sub: sub ? sub.textContent : null
+      };
+    };
+    R.drive_parked  = driveState(driveCard("P", 0));
+    R.drive_drive   = driveState(driveCard("D", 42));
+    R.drive_reverse = driveState(driveCard("R", 3));
+    R.drive_no_speed = driveState(driveCard("D", 0)).sub;
+    R.drive_motion_off = driveState(driveCard("D", 42, { drive_motion: "off" })).wheels;
+    /* an unknown pack gets no wheels rather than guessed ones */
+    R.drive_unknown_pack = driveState(driveCard("D", 42, { wheels: null })).wheels;
+    /* miles stay miles */
+    (() => {
+      const st = customStates("t_");
+      st["binary_sensor.t_online"].state = "on";
+      st["sensor.t_range"].attributes.unit_of_measurement = "mi";
+      st["sensor.t_shift_state"] = { entity_id: "sensor.t_shift_state", state: "D", attributes: {} };
+      st["device_tracker.t_location_tracker"] = { entity_id: "device_tracker.t_location_tracker",
+        state: "not_home", attributes: { latitude: 1, longitude: 2, speed: 42 } };
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card",
+        cars: [{ name: "T", model: "Model Y", paint: "red", prefix: "t_", image_side: "side.jpg" }] });
+      c.hass = { states: st };
+      R.drive_speed_imperial = c.shadowRoot.getElementById("sub").textContent;
+    })();
 
     /* ---- the running mode must be visible on the HOME view -------------
        Pet Mode on a parked car used to show nothing outside the Climate view. */
@@ -263,12 +317,32 @@ function customStates(p) {
   check("Low lights one wave",                    r.seat_low.lit, 1);
   check("High lights three",                      r.seat_high.lit, 3);
   check("Buddy's \"Heat Medium\" lights two",      r.seat_heatMedium.lit, 2);
-  check("cooling is BLUE, not hot red",           [r.seat_coolHigh.lit, r.seat_coolHigh.col], [3, "#4aa3ff"]);
+  check("cooling is BLUE, not hot red",           [r.seat_coolHigh.lit, r.seat_coolHigh.col], [3, "#385ec4"]);
+  /* Measured off the app: on Auto the waves stay GREY and the word appears.
+     v1.1.3 shipped them coloured, which read as "someone set this to full". */
   check("Auto is labelled, not shown as maximum", r.seat_auto.auto, true);
+  check("Auto lights no waves at all",            r.seat_auto.lit, 0);
+  check("Auto leaves every wave grey",            r.seat_auto.grey, true);
+  check("the Auto label is grey, not hot",        r.seat_auto.autoCol, "#90908e");
   check("wheel Low lights one of two",            r.wheel_low.lit, 1);
   check("wheel High lights two",                  r.wheel_high.lit, 2);
   check("wheel Auto is labelled",                 r.wheel_auto.auto, true);
+  check("wheel Auto lights no waves",             r.wheel_auto.lit, 0);
+  check("wheel Auto label is grey",               r.wheel_auto.autoCol, "#90908e");
   check("wheel falls back to the switch",         r.wheel_switchOnly.lit, 2);
+
+  console.log("\nthe driving view");
+  check("parked shows no road",            r.drive_parked.shown, false);
+  check("in gear shows the road",          r.drive_drive.shown, true);
+  check("reverse counts as driving",       r.drive_reverse.shown, true);
+  check("the road has markings",           r.drive_drive.lines > 0, true);
+  check("every marking slides",            r.drive_drive.slides, r.drive_drive.lines);
+  check("both wheels turn",                r.drive_drive.wheels, 2);
+  check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
+  check("miles stay miles",                r.drive_speed_imperial, "42 mph");
+  check("a stopped car keeps its status",  r.drive_no_speed, "Driving");
+  check("drive_motion: off stops wheels",  r.drive_motion_off, 0);
+  check("an unmeasured pack gets none",    r.drive_unknown_pack, 0);
 
   console.log("\nthe running mode on the home view");
   check("nothing added when the mode is normal", r.home_normal, "Parked");
