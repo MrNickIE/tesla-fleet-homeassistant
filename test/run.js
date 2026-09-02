@@ -214,6 +214,8 @@ function customStates(p) {
                   (+e.getAttribute("rx") / +e.getAttribute("ry")).toFixed(2)]) : null,
         cycle: o && o.querySelector("line > animate")
           ? o.querySelector("line > animate").getAttribute("dur") : null,
+        wheelDur: o && o.querySelector("animateTransform")
+          ? o.querySelector("animateTransform").getAttribute("dur") : null,
         sub: sub ? sub.textContent : null
       };
     };
@@ -223,7 +225,19 @@ function customStates(p) {
     R.drive_no_speed = driveState(driveCard("D", 0)).sub;
     R.drive_motion_off = driveState(driveCard("D", 42, { drive_motion: "off" }));
     /* somebody else's photo gets still wheels: a wrong ellipse is a wobble */
-    R.drive_unmeasured_pack = driveState(driveCard("D", 42, { wheels: null })).spinners;
+    R.drive_unmeasured_pack = driveState(driveCard("D", 42,
+      { wheels: null, image_side: "nothing/we/measured/side.jpg" })).spinners;
+    /* Patsy is configured with the individual image_* keys and no `images`
+       directory, so the pack has to be recognised from the photo's URL.
+       Getting this wrong meant the Model Y cars showed no animation at all. */
+    R.pack_from_image_side = driveState(driveCard("D", 42,
+      { wheels: null, road: null,
+        image_side: "/local/Tesla/models/y/red/app/side.jpg?v=1" }));
+    /* speed tiers: below 20 km/h the road runs at 1.7s, above it doubles */
+    R.tier_slow = driveState(driveCard("D", 6)).cycle;    /* 6mph  = 9.7 km/h */
+    R.tier_fast = driveState(driveCard("D", 42)).cycle;   /* 42mph = 68 km/h  */
+    R.tier_slow_wheel = driveState(driveCard("D", 6)).wheelDur;
+    R.tier_fast_wheel = driveState(driveCard("D", 42)).wheelDur;
     /* the demo switch must be inert without its helper, and must be gone
        before release. If this test starts failing because DEMO_DRIVE no
        longer exists, delete the test - that is the intended end state. */
@@ -384,14 +398,18 @@ function customStates(p) {
   check("both wheels share an axis ratio", r.drive_drive.clipGeom[0][1], r.drive_drive.clipGeom[1][1]);
   check("both wheels share a lean",
     r.drive_drive.clipGeom[0][0].split(" ")[0], r.drive_drive.clipGeom[1][0].split(" ")[0]);
-  check("the road is calm, not frantic",   r.drive_drive.cycle, "1.7s");
-  check("a pack can set its own cycle",    r.drive_cycle_override, "2.4s");
+  check("under 20km/h the road is calm",   r.tier_slow, "1.7s");
+  check("over 20km/h the road doubles",    r.tier_fast, "0.85s");
+  check("the wheels follow the road",      [r.tier_slow_wheel, r.tier_fast_wheel], ["0.9s", "0.45s"]);
+  check("a pack can set its own cycle",    r.drive_cycle_override, "1.2s");
   check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
   check("miles stay miles",                r.drive_speed_imperial, "42 mph");
   check("a stopped car keeps its status",  r.drive_no_speed, "Driving");
   check("drive_motion: off draws no road", r.drive_motion_off.lines, 0);
   check("drive_motion: off stills wheels", r.drive_motion_off.spinners, 0);
   check("an unmeasured pack gets none",    r.drive_unmeasured_pack, 0);
+  check("a pack is found from image_side", r.pack_from_image_side.spinners, 6);
+  check("and its road marking is on show", r.pack_from_image_side.lines, 1);
   check("the demo switch is inert by default", r.demo_switch_inert, false);
   check("the demo switch forces driving",  r.demo_switch_on, true);
   check("the demo speed is invented",      r.demo_switch_sub, "68 km/h");

@@ -172,7 +172,16 @@
        screen's size that reads as frantic, which is what Nick called it. At
        1.7s a marking passes about every second and a half and it settles
        down. A road spec can override with its own cycle. */
-    cycle: 1.7,            // seconds per dash period
+    cycle: 1.7,            // seconds per dash period, slow
+    /* The app scales the road with the car. Nick, watching the demo: "in the
+       app, this is like the car is driving slow ... below 20km. Above this it
+       should be double the speed on the animations". That agrees with the one
+       measurement there is: the 0.833s cycle came off a frame whose status
+       read 67 KM/H, and half of 1.7 is 0.85. Two tiers rather than a curve,
+       because one video at one speed cannot tell me the shape of a curve;
+       record the app at 30 and 50 and this becomes a table. */
+    fastCycle: 0.85,       // seconds per dash period, above the threshold
+    fastAbove: 20,         // km/h at which the road doubles its speed
     dash: 1 / 3,           // fraction of the period that is painted
     colour: "#2b2a2b",
     /* The app's dash period is 0.86 car widths, which in its wide framing
@@ -278,7 +287,8 @@
      motion blur, which is what a camera sees and which also softens what
      is left of the resampling. */
   const WHEEL = {
-    dur: 0.9,        // seconds per revolution
+    dur: 0.9,        // seconds per revolution, slow
+    fastDur: 0.45,   // seconds per revolution above DRIVE.fastAbove
     clip: 0.74,      // fraction of the fitted ellipse that rotates
     copies: 3,       // stacked copies making the motion blur
     spread: 18       // degrees between the first and last copy
@@ -327,7 +337,7 @@
      Both are [cx, cy, a, b, phi]. The transform is M . rotate . M-inverse,
      where M squashes a circle into the ellipse: that is the only form that
      turns an ellipse in its own plane rather than skewing it. */
-  function spinWheel(id, src, dst, lift) {
+  function spinWheel(id, src, dst, lift, dur) {
     if (!src || !dst || src.length < 5 || dst.length < 5) return "";
     const [sx, sy, sa, sb, sp] = src, [dx, dy, da, db, dp] = dst;
     if (!(sa > 0 && sb > 0 && da > 0 && db > 0)) return "";
@@ -346,7 +356,7 @@
         <g transform="rotate(${off.toFixed(2)})">
           <animateTransform attributeName="transform" type="rotate"
             from="${off.toFixed(2)}" to="${(off - 360).toFixed(2)}"
-            dur="${WHEEL.dur}s" repeatCount="indefinite"/>
+            dur="${dur}s" repeatCount="indefinite"/>
           <g transform="${inn}"${lift ? ` filter="url(#dwLift)"` : ""}>
             <use href="#dwImg"/>
           </g>
@@ -361,7 +371,7 @@
       `<g clip-path="url(#dwC${id})">${layers}</g>`;
   }
 
-  function driveWheels(wheels, src) {
+  function driveWheels(wheels, src, dur) {
     if (!wheels || !wheels.front || !wheels.rear || !src) return "";
     const lift = wheels.lift || 1;
     return `<defs>
@@ -372,14 +382,14 @@
           <feFuncB type="linear" slope="${lift}"/>
         </feComponentTransfer>
       </filter></defs>` +
-      spinWheel("f", wheels.front, wheels.front, 0) +
-      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1);
+      spinWheel("f", wheels.front, wheels.front, 0, dur) +
+      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1, dur);
   }
 
   /* Dashed lane markings sliding along their own axis. The slide is
      stroke-dashoffset rather than a transform, so the dashes travel along
      the line instead of the whole line drifting across the frame. */
-  function driveRoad(w, h, box, road) {
+  function driveRoad(w, h, box, road, cycle) {
     if (!road || !((road.lines && road.lines.length) || (road.drops && road.drops.length))) return "";
     /* the car box only sets the dash scale - one dash period is 0.86 car
        widths, so the road keeps its proportions whatever pack is loaded */
@@ -390,8 +400,14 @@
     const period = Math.max(8, cw * DRIVE.period);
     const on = period * DRIVE.dash;
     const cx = w / 2;
+    /* An explicit `lines` was measured on that photo and is trusted as-is.
+       A `drops` default is derived from the measured car box, whose bottom
+       edge includes the shadow, so on a tightly cropped photo it can land
+       below the frame and the marking is simply never seen. That is exactly
+       what happened to Patsy. Clamped so a default can always be seen. */
     const spec = road.lines ||
-      (road.drops || []).map((d) => [(box && box.length === 4 ? box[3] : h * 0.85) + d[0], d[1]]);
+      (road.drops || []).map((d) => [Math.min(h - 3,
+        (box && box.length === 4 ? box[3] : h * 0.85) + d[0]), d[1]]);
     return spec.map((ln, i) => {
       const cy = ln[0];
       const sw = Math.max(0.8, ln[1] || cw * DRIVE.width);
@@ -401,7 +417,7 @@
             stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
             stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">
         <animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
-                 to="${(off - period).toFixed(1)}" dur="${(road.cycle || DRIVE.cycle)}s" repeatCount="indefinite"/>
+                 to="${(off - period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>
       </line>`;
     }).join("");
   }
@@ -891,26 +907,51 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
+    /* Which bundled pack is on screen. This used to look only at `images`
+       and the auto-detected base, and so missed every car configured with
+       the individual image_side / image_charging keys instead of a single
+       `images` directory - which is how Patsy is set up. The result was
+       that the Model Y cars matched no pack, got no wheels, and had their
+       road line pushed off the bottom of the frame, so Nick saw the whole
+       animation only on the Model 3s. The URL of the photo being displayed
+       is the reliable place to look, because it is the thing that actually
+       decides which car is on screen. */
+    _packKey(src) {
+      const hay = String(this._car.images || "") + " " +
+                  String(this._car._autoBase || "") + " " + String(src || "");
+      return Object.keys(PACK_WHEELS).filter((k) => hay.indexOf(k) >= 0)[0] || null;
+    }
     /* Wheel ellipses for the photo we are showing. Only the bundled packs
        were measured, and a wrong ellipse is a visible wobble, so somebody
        else's photo gets still wheels rather than a guess. */
-    _wheels() {
+    _wheels(src) {
       if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
       const cfg = this._car.wheels;
       if (cfg && cfg.front && cfg.rear) return cfg;
-      const dir = String(this._car.images || this._car._autoBase || "");
-      const hit = Object.keys(PACK_WHEELS).filter((k) => dir.indexOf(k) >= 0)[0];
+      const hit = this._packKey(src);
       return hit ? PACK_WHEELS[hit] : null;
     }
     /* The ground plane for the photo we are actually showing.
        drive_motion: off suppresses the moving road altogether. */
-    _road() {
+    _road(src) {
       if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
       const cfg = this._car.road;
       if (cfg && typeof cfg === "object" && cfg.lines) return cfg;
-      const dir = String(this._car.images || this._car._autoBase || "");
-      const hit = Object.keys(PACK_ROAD).filter((k) => dir.indexOf(k) >= 0)[0];
+      const hit = this._packKey(src);
       return hit ? PACK_ROAD[hit] : ROAD_DEFAULT;
+    }
+    /* Speed in km/h whatever the car displays, for choosing the animation
+       tier. Kept apart from _speed(), which formats it for the eye. */
+    _speedKph() {
+      const t = this._st("location");
+      let raw = t && t.attributes ? t.attributes.speed : null;
+      if (this._demoDrive() && !(Number(raw) > 0)) raw = DEMO_SPEED_MPH;
+      const mph = Number(raw);
+      return isFinite(mph) && mph > 0 ? mph * 1.609344 : null;
+    }
+    _demoDrive() {
+      return !!(this._hass && this._hass.states && this._hass.states[DEMO_DRIVE] &&
+                this._hass.states[DEMO_DRIVE].state === "on");
     }
     _carBox(url, sfx) {
       if (!url) return DF_CALIB[sfx];
@@ -1169,6 +1210,9 @@
 
     _build() {
       this._built = true;
+      /* the driving overlay is filled in by _update, so its cached tier has
+         to be forgotten here or a rebuilt card keeps an empty overlay */
+      this._driveTier = null;
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
       const car = this._car;
       const multi = this._cars.length > 1;
@@ -1779,7 +1823,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels(), src)}</svg>
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1795,7 +1839,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels(), src)}</svg>
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -2192,8 +2236,7 @@
       else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
       /* DEMO SWITCH - see DEMO_DRIVE above. Remove before release. */
-      const demo = !!(this._hass && this._hass.states && this._hass.states[DEMO_DRIVE] &&
-                      this._hass.states[DEMO_DRIVE].state === "on");
+      const demo = this._demoDrive();
       if (demo) { status = "Driving"; durKey = "shift"; }
       const moving = status === "Driving";
       const durS = this._st(durKey);
@@ -2223,8 +2266,31 @@
       const sp = this._speed() || (demo ? this._speedFrom(DEMO_SPEED_MPH) : null);
       if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
+      /* Built here rather than in _build so the animation speed can follow
+         the car. SMIL will not pick up a changed dur on a running animation,
+         so the tier change is a re-render of this one element; it happens
+         only when the car crosses the threshold. Clearing it while parked
+         also stops six copies of the pack photo animating out of sight. */
       const dOvl = q("driveOvl");
-      if (dOvl) dOvl.style.display = moving ? "" : "none";
+      if (dOvl) {
+        const tier = moving ? ((this._speedKph() || 0) >= DRIVE.fastAbove ? "fast" : "slow") : "off";
+        if (tier !== this._driveTier) {
+          this._driveTier = tier;
+          if (tier === "off") dOvl.innerHTML = "";
+          else {
+            const dsrc = dOvl.getAttribute("data-src") || "";
+            const dsfx = dOvl.getAttribute("data-sfx") || "Rest";
+            const fast = tier === "fast";
+            const rd = this._road(dsrc);
+            const own = rd && rd.cycle;
+            const cyc = fast ? (own ? own / 2 : DRIVE.fastCycle) : (own || DRIVE.cycle);
+            dOvl.innerHTML =
+              driveRoad(233, 108, this._carBox(dsrc, dsfx), rd, +cyc.toFixed(3)) +
+              driveWheels(this._wheels(dsrc), dsrc, fast ? WHEEL.fastDur : WHEEL.dur);
+          }
+        }
+        dOvl.style.display = moving ? "" : "none";
+      }
 
       // on-car states
       const lockS = this._st("lock");
