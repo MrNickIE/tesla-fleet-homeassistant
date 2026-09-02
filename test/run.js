@@ -288,6 +288,8 @@ function customStates(p) {
     R.cyc_crawl = driveState(driveCard("D", 2)).cycle;  /* clamped by maxCycle */
     R.cyc_flat_out = driveState(driveCard("D", 250)).cycle; /* by minCycle */
     R.tier_slow = R.cyc_20; R.tier_fast = R.cyc_80;
+    R.w40 = driveState(driveCard("D", 40)).wheelDur;
+    R.wflat = driveState(driveCard("D", 250)).wheelDur;
     R.tier_slow_wheel = driveState(driveCard("D", 20)).wheelDur;
     R.tier_fast_wheel = driveState(driveCard("D", 80)).wheelDur;
     /* A wheel that does not roll with the road under it is the first thing
@@ -480,6 +482,13 @@ function customStates(p) {
   check("the wheels rotate real pixels",   r.drive_drive.wheelImg, "side.jpg");
   check("both wheels are clipped",         r.drive_drive.wheelClips, 2);
   check("three blur copies per wheel",     r.drive_drive.spinners, 6);
+  /* the wheel must keep pace with the road at EVERY speed. It used to have a
+     floor of its own, and at 120 km/h the road ran at 0.12s while the wheel
+     sat at 0.18 - decoupled by half, the original fault moved up the range. */
+  check("wheel tracks road at all speeds",
+    [r.cyc_20, r.cyc_40, r.cyc_80, r.cyc_flat_out].map((c, i) =>
+      Math.abs(parseFloat([r.tier_slow_wheel, r.w40, r.tier_fast_wheel, r.wflat][i]) /
+               parseFloat(c) - 1.012) < 0.02), [true, true, true, true]);
   check("both wheels share an axis ratio", r.drive_drive.clipGeom[0][1], r.drive_drive.clipGeom[1][1]);
   check("both wheels share a lean",
     r.drive_drive.clipGeom[0][0].split(" ")[0], r.drive_drive.clipGeom[1][0].split(" ")[0]);

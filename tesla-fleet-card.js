@@ -325,7 +325,26 @@
 
        Set that against the road's own speed, one dash period per cycle, and
        the period falls out. It stays right at both tiers and on any pack. */
-    minDur: 0.18,    // a floor, so a tiny wheel cannot strobe
+    /* The wheel must NOT have a floor of its own. It had 0.18s, and a speed
+       sweep showed the road running at 0.12s at 120 km/h while the wheel sat
+       clamped at 0.18 - decoupled by half, which is the very fault this
+       derivation was written to fix, just moved up the speed range. The road's
+       own floor is the single limit now.
+
+       Strobing is handled by BLUR instead, which is the honest fix. A wheel
+       with ten repeating features aliases at 60fps once it turns more than 18
+       degrees per frame, and 6/dur degrees per frame means anything under
+       about 0.33s per revolution aliases - roughly 55 km/h and up. An aliased
+       wheel reads as slow, stopped, or backwards, so this was very likely part
+       of why the animation still felt slow after the road was right.
+
+       So the motion blur widens with speed: the smear is kept wider than the
+       per-frame rotation, which leaves nothing sharp to alias, and a fast
+       wheel becomes a smooth ring exactly as a camera records one. */
+    minDur: 0.05,    // effectively never binds; the road's floor governs
+    blurCover: 2.2,  // smear width as a multiple of the per-frame rotation
+    maxSpread: 130,  // degrees, beyond which the ring is smeared enough
+    maxCopies: 5,    // each copy is a full image draw; keep the cost bounded
     clip: 0.74,      // fraction of the fitted ellipse that rotates
     copies: 3,       // stacked copies making the motion blur
     spread: 18       // degrees between the first and last copy
@@ -389,10 +408,17 @@
        blur, and there is no motion to blur, so a standstill gets one copy at
        full opacity and no rotation. */
     const moving = dur > 0;
-    const n = moving ? Math.max(1, WHEEL.copies | 0) : 1;
+    /* per-frame rotation at 60fps, and a smear wide enough to cover it */
+    const perFrame = moving ? 6 / dur : 0;
+    const spread = moving
+      ? Math.min(WHEEL.maxSpread, Math.max(WHEEL.spread, WHEEL.blurCover * perFrame))
+      : 0;
+    const n = moving
+      ? Math.max(WHEEL.copies, Math.min(WHEEL.maxCopies, Math.ceil(spread / 22) + 1))
+      : 1;
     let layers = "";
     for (let i = 0; i < n; i++) {
-      const off = n === 1 ? 0 : -WHEEL.spread / 2 + WHEEL.spread * i / (n - 1);
+      const off = n === 1 ? 0 : -spread / 2 + spread * i / (n - 1);
       layers += `<g transform="${out}" opacity="${(1 / n).toFixed(3)}">
         <g transform="rotate(${off.toFixed(2)})">
           ${moving ? `<animateTransform attributeName="transform" type="rotate"
