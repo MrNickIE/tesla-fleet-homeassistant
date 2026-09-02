@@ -162,30 +162,40 @@
     width: 0.0131          // stroke width as a fraction of car width
   };
 
-  /* Per-pack ground plane, in Rest view units (233 x 108), read off a 5px-
-     per-unit grid laid over each bundled photo. angle is the car's wheelbase
-     angle in that photo - front hub bottom to rear hub bottom - because the
-     app's road markings run parallel to the direction of travel and so track
-     whatever camera the render used. Each entry in lines is [y, stroke] where
-     y is the marking's height at the middle of the frame.
+  /* Per-pack ground plane, in Rest view units (233 x 108). angle is the line
+     through the two tyre contact patches - the lowest point of the car's
+     silhouette under each wheel - because a lane marking on the ground runs
+     parallel to the direction of travel, and so does the line joining the
+     front and rear contact patches on the same side of the car.
 
-     Absolute rather than relative to the runtime car box on purpose: that box
-     is a luma threshold that swallows the car's shadow by a different amount
-     in every photo, so it would drag the road up and down between packs.
+     Contact patches beat hub centres and hub bottoms here. The far wheel is
+     drawn smaller by perspective, so a line through the hubs is too shallow,
+     and the wheels are ellipses so the bottom of a fitted circle is not where
+     the tyre meets the road. Reading the silhouette directly is stable to
+     0.4 degrees across luma thresholds from 30 to 38.
 
-     I first read these angles off by eye as -12.6 and -33.6 and they were
-     both wrong; the three packs actually agree closely, which is the check
-     that they are right - it is one camera rig photographing three cars. */
+     The three packs come out at -21.90, -21.78 and -21.78, which is the check
+     that this is measured and not invented: one camera rig photographing
+     three different cars should agree, and it does, to about a tenth of a
+     degree. (Earlier eyeball readings off a grid gave -12.6, -33.6 and -20.4.
+     All three were wrong. Measure the pixels.) The app's own driving render
+     sits at -24.6 because it is a different camera, which is exactly why this
+     cannot be one shared constant.
+
+     lines is [y, stroke] where y is the marking's height at the middle of the
+     frame, sitting about 7 units in front of the car's own ground line. One
+     marking, not two: two read as a hatch rather than a road. Absolute rather
+     than relative to the runtime car box, because that box is a luma
+     threshold that swallows the shadow by a different amount in each photo. */
   const PACK_ROAD = {
-    "models/y/red/app":   { angle: -20.4, lines: [[93, 2.0], [104.5, 2.6]] },
-    "models/y/white/app": { angle: -17.9, lines: [[102, 2.0], [113.5, 2.6]] },
-    "models/3/grey/app":  { angle: -20.8, lines: [[98, 2.0], [109.5, 2.6]] }
+    "models/y/red/app":   { angle: -21.9, lines: [[93.3, 2.2]] },
+    "models/y/white/app": { angle: -21.8, lines: [[105.1, 2.2]] },
+    "models/3/grey/app":  { angle: -21.8, lines: [[97.6, 2.2]] }
   };
-  /* An unmeasured photo still gets a road: the measured car box's bottom edge
-     lands within a unit or two of where the tyres meet the ground on all
-     three bundled packs, so it stands in for the baseline, and -20 is what
-     the three of them average to. */
-  const ROAD_DEFAULT = { angle: -20, drops: [[1.5, 2.0], [13, 2.6]] };
+  /* An unmeasured photo still gets a marking: the measured car box's bottom
+     edge lands about 2 units below the tyre contact line on all three bundled
+     packs, so it stands in for the ground, and -21.8 is what they agree on. */
+  const ROAD_DEFAULT = { angle: -21.8, drops: [[9, 2.2]] };
 
   /* Wheel hubs [cx, cy, r] in Rest view units, off the same grids. The photos
      show each wheel as an ellipse; r is the mean of the two axes, which is
