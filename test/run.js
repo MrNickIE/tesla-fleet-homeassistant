@@ -186,7 +186,9 @@ function customStates(p) {
       document.body.appendChild(c);
       c.setConfig({ type: "custom:tesla-fleet-card", cars: [Object.assign(
         { name: "T", model: "Model Y", paint: "red", prefix: "t_",
-          image_side: "side.jpg" }, extra || {})] });
+          image_side: "side.jpg",
+          wheels: { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
+                    rear: [187.9, 45.8, 13.83, 6.11, 91.1] } }, extra || {})] });
       c.hass = { states: st };
       return c;
     };
@@ -197,8 +199,11 @@ function customStates(p) {
         shown: o ? o.style.display !== "none" : null,
         lines: o ? o.querySelectorAll("line").length : null,
         slides: o ? o.querySelectorAll("line > animate").length : null,
-        /* a photograph's wheels cannot turn, so nothing may try to spin them */
         spinners: o ? o.querySelectorAll("animateTransform").length : null,
+        wheelClips: o ? o.querySelectorAll("clipPath[id^=dwC]").length : null,
+        /* the rotating pixels must be the pack photo itself, not drawn art */
+        wheelImg: o && o.querySelector("image#dwImg")
+          ? o.querySelector("image#dwImg").getAttribute("href") : null,
         cycle: o && o.querySelector("line > animate")
           ? o.querySelector("line > animate").getAttribute("dur") : null,
         sub: sub ? sub.textContent : null
@@ -208,7 +213,9 @@ function customStates(p) {
     R.drive_drive   = driveState(driveCard("D", 42));
     R.drive_reverse = driveState(driveCard("R", 3));
     R.drive_no_speed = driveState(driveCard("D", 0)).sub;
-    R.drive_motion_off = driveState(driveCard("D", 42, { drive_motion: "off" })).lines;
+    R.drive_motion_off = driveState(driveCard("D", 42, { drive_motion: "off" }));
+    /* somebody else's photo gets still wheels: a wrong ellipse is a wobble */
+    R.drive_unmeasured_pack = driveState(driveCard("D", 42, { wheels: null })).spinners;
     R.drive_cycle_override = driveState(driveCard("D", 42,
       { road: { angle: -21.9, cycle: 2.4, lines: [[93.3, 2.2]] } })).cycle;
     /* miles stay miles */
@@ -341,16 +348,20 @@ function customStates(p) {
   check("the road has markings",           r.drive_drive.lines > 0, true);
   check("one marking, not a hatch",        r.drive_drive.lines, 1);
   check("every marking slides",            r.drive_drive.slides, r.drive_drive.lines);
-  /* the wheel sweep was built, shown to Nick, called horrific and removed.
-     A photograph's wheels cannot turn and faking it over one looks worse
-     than leaving them still. This asserts it stays gone. */
-  check("nothing tries to spin a wheel",   r.drive_drive.spinners, 0);
+  /* The wheels rotate the pack photo's OWN pixels, clipped to each hub.
+     The first attempt drew arcs over them and Nick called it horrific;
+     asserting the href here is what stops drawn geometry coming back. */
+  check("the wheels rotate real pixels",   r.drive_drive.wheelImg, "side.jpg");
+  check("both wheels are clipped",         r.drive_drive.wheelClips, 2);
+  check("three blur copies per wheel",     r.drive_drive.spinners, 6);
   check("the road is calm, not frantic",   r.drive_drive.cycle, "1.7s");
   check("a pack can set its own cycle",    r.drive_cycle_override, "2.4s");
   check("speed replaces the parked timer", r.drive_drive.sub, "68 km/h");
   check("miles stay miles",                r.drive_speed_imperial, "42 mph");
   check("a stopped car keeps its status",  r.drive_no_speed, "Driving");
-  check("drive_motion: off draws no road", r.drive_motion_off, 0);
+  check("drive_motion: off draws no road", r.drive_motion_off.lines, 0);
+  check("drive_motion: off stills wheels", r.drive_motion_off.spinners, 0);
+  check("an unmeasured pack gets none",    r.drive_unmeasured_pack, 0);
 
   console.log("\nthe running mode on the home view");
   check("nothing added when the mode is normal", r.home_normal, "Parked");

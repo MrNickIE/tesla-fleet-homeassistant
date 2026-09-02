@@ -117,7 +117,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, entities: {} };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -201,6 +201,120 @@
      edge lands about 2 units below the tyre contact line on all three bundled
      packs, so it stands in for the ground, and -21.8 is what they agree on. */
   const ROAD_DEFAULT = { angle: -21.8, drops: [[9, 2.2]] };
+
+  /* ---- the wheels ----------------------------------------------------
+     The first attempt at this drew four faint arcs over each hub and span
+     them. Nick's verdict was one word: horrific, and he was right, because
+     it put invented geometry on top of a photographed wheel.
+
+     This rotates the photograph's own pixels instead. The pack image is
+     drawn a second time inside the overlay, clipped to the wheel, and
+     spun about the hub, so the spokes that turn are the real ones with
+     their real colour and lighting.
+
+     Two things have to be right or it wobbles instead of turning.
+
+     ONE: the wheel is an ELLIPSE, so the pixels must be un-squashed to a
+     circle, rotated, and squashed back. Getting the squash AXIS wrong was
+     the mistake that cost the most here. I assumed it ran along the car's
+     direction of travel, on the reasoning that the wheel is a circle in
+     the car's side plane. That is true and still gives the wrong answer:
+     under projection the two in-plane directions do not stay
+     perpendicular, so the ellipse's own principal axes are what a
+     rotation has to be built from, and they are nowhere near the travel
+     line. These wheels lean 5 to 23 degrees off vertical. Nick spotted it
+     immediately from an overlay: "those overlap lines you drew are not
+     matching the wheel shape".
+
+     Each wheel is therefore a full ellipse: centre, major semi-axis a,
+     minor semi-axis b, and the major axis angle. Fitted by second moments
+     over the wheel's own pixels, re-masked to the fitted ellipse and
+     refitted four times so the centre settles onto the hub. A centre off
+     by a unit is a visible wobble, so this is worth doing properly.
+
+     TWO: the rear wheel is only about sixteen source pixels across and
+     the most obliquely viewed, so un-squashing it doubles those pixels
+     into obvious vertical streaks. But it is the SAME WHEEL as the front
+     one. So the rear takes the front wheel's pixels, rotated, scaled by
+     the ratio of the two radii and squashed into the rear's own ellipse.
+     Same wheel design, correct perspective, several times the detail. A
+     brightness lift covers the rear sitting in slightly less shadow.
+
+     Three copies a few degrees apart at a third opacity each give a light
+     motion blur, which is what a camera sees and which also softens what
+     is left of the resampling. */
+  const WHEEL = {
+    dur: 0.9,        // seconds per revolution
+    clip: 0.74,      // fraction of the fitted ellipse that rotates
+    copies: 3,       // stacked copies making the motion blur
+    spread: 18       // degrees between the first and last copy
+  };
+
+  /* [cx, cy, a, b, majorAngle] per wheel in Rest view units, plus the
+     rear's brightness relative to the front. */
+  const PACK_WHEELS = {
+    "models/y/red/app": { lift: 1.26,
+      front: [106.9, 77.9, 15.65, 10.99, 109.3],
+      rear:  [187.9, 45.8, 13.83, 6.11, 91.1] },
+    "models/y/white/app": { lift: 1.11,
+      front: [108.8, 91.7, 12.27, 8.19, 113.4],
+      rear:  [192.4, 59.1, 10.92, 6.47, 108.7] },
+    "models/3/grey/app": { lift: 1.06,
+      front: [107.0, 81.4, 15.19, 10.33, 95.7],
+      rear:  [188.2, 50.0, 13.75, 8.15, 94.1] }
+  };
+
+  /* Rotate the wheel photographed at `src` and land it in the ellipse `dst`.
+     Both are [cx, cy, a, b, phi]. The transform is M . rotate . M-inverse,
+     where M squashes a circle into the ellipse: that is the only form that
+     turns an ellipse in its own plane rather than skewing it. */
+  function spinWheel(id, src, dst, lift) {
+    const [sx, sy, sa, sb, sp] = src, [dx, dy, da, db, dp] = dst;
+    if (!(sa > 0 && sb > 0 && da > 0 && db > 0)) return "";
+    const scale = da / sa;
+    /* outermost: squash into dst's ellipse and size it to dst */
+    const out = `translate(${dx} ${dy}) rotate(${dp}) scale(1 ${(db / da).toFixed(4)})` +
+                ` rotate(${-dp}) scale(${scale.toFixed(4)})`;
+    /* innermost: un-squash src's ellipse to a true circle about its hub */
+    const inn = `rotate(${sp}) scale(1 ${(sa / sb).toFixed(4)}) rotate(${-sp})` +
+                ` translate(${-sx} ${-sy})`;
+    const n = Math.max(1, WHEEL.copies | 0);
+    let layers = "";
+    for (let i = 0; i < n; i++) {
+      const off = n === 1 ? 0 : -WHEEL.spread / 2 + WHEEL.spread * i / (n - 1);
+      layers += `<g transform="${out}" opacity="${(1 / n).toFixed(3)}">
+        <g transform="rotate(${off.toFixed(2)})">
+          <animateTransform attributeName="transform" type="rotate"
+            from="${off.toFixed(2)}" to="${(off - 360).toFixed(2)}"
+            dur="${WHEEL.dur}s" repeatCount="indefinite"/>
+          <g transform="${inn}"${lift ? ` filter="url(#dwLift)"` : ""}>
+            <use href="#dwImg"/>
+          </g>
+        </g></g>`;
+    }
+    /* The clip is on a wrapping group with no transform of its own, so it is
+       unambiguously in view space. Kept inside the rim, which also means the
+       pixels swept in from the edges are more wheel and never bodywork. */
+    const c = WHEEL.clip;
+    return `<clipPath id="dwC${id}"><ellipse cx="${dx}" cy="${dy}" rx="${(da * c).toFixed(2)}"` +
+      ` ry="${(db * c).toFixed(2)}" transform="rotate(${dp} ${dx} ${dy})"/></clipPath>` +
+      `<g clip-path="url(#dwC${id})">${layers}</g>`;
+  }
+
+  function driveWheels(wheels, src) {
+    if (!wheels || !wheels.front || !wheels.rear || !src) return "";
+    const lift = wheels.lift || 1;
+    return `<defs>
+      <image id="dwImg" href="${src}" x="0" y="0" width="233" height="108" preserveAspectRatio="none"/>
+      <filter id="dwLift" x="-10%" y="-10%" width="120%" height="120%">
+        <feComponentTransfer>
+          <feFuncR type="linear" slope="${lift}"/><feFuncG type="linear" slope="${lift}"/>
+          <feFuncB type="linear" slope="${lift}"/>
+        </feComponentTransfer>
+      </filter></defs>` +
+      spinWheel("f", wheels.front, wheels.front, 0) +
+      spinWheel("r", wheels.front, wheels.rear, 1);
+  }
 
   /* Dashed lane markings sliding along their own axis. The slide is
      stroke-dashoffset rather than a transform, so the dashes travel along
@@ -717,6 +831,17 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
+    /* Wheel ellipses for the photo we are showing. Only the bundled packs
+       were measured, and a wrong ellipse is a visible wobble, so somebody
+       else's photo gets still wheels rather than a guess. */
+    _wheels() {
+      if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
+      const cfg = this._car.wheels;
+      if (cfg && cfg.front && cfg.rear) return cfg;
+      const dir = String(this._car.images || this._car._autoBase || "");
+      const hit = Object.keys(PACK_WHEELS).filter((k) => dir.indexOf(k) >= 0)[0];
+      return hit ? PACK_WHEELS[hit] : null;
+    }
     /* The ground plane for the photo we are actually showing.
        drive_motion: off suppresses the moving road altogether. */
     _road() {
@@ -1591,7 +1716,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}</svg>
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels(), src)}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1607,7 +1732,7 @@
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
   <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}</svg>
+       style="display:none;pointer-events:none">${driveRoad(233, 108, this._carBox(src, rSfx), this._road())}${driveWheels(this._wheels(), src)}</svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
