@@ -176,8 +176,10 @@ function customStates(p) {
        tesla_custom reports fan_modes ["off","bioweapon"] for every car,
        checked on four of Nick's. The mode needs a HEPA filter, which Model
        S/X/Y carry and Model 3 does not. */
-    const climModel = (model, extra) => {
+    const climModel = (model, extra, vin) => {
       const st = customStates("t_");
+      if (vin) st["binary_sensor.t_online"] = { entity_id: "binary_sensor.t_online",
+        state: "on", attributes: { vin: vin } };
       st["climate.t_hvac_climate_system"] = { entity_id: "climate.t_hvac_climate_system",
         state: "heat_cool", attributes: { preset_mode: "normal",
           preset_modes: ["normal", "defrost", "keep", "dog", "camp"],
@@ -200,6 +202,28 @@ function customStates(p) {
        that predates the factory HEPA can be told it does not */
     R.bio_forced_on = hasBio(climModel("Model 3", { show_climate: ["bio"] }));
     R.bio_forced_off = hasBio(climModel("Model Y", { hide_climate: ["bio"] }));
+    /* the YEAR decides whether this particular car got the filter: the Model Y
+       line started fitting them in June 2021. Decoded from VIN position 10. */
+    R.bio_y_2023 = hasBio(climModel("Model Y", null, "LRWYHCEKXPC730074")); /* P = 2023 */
+    R.bio_y_2020 = hasBio(climModel("Model Y", null, "LRWYHCEKXLC730074")); /* L = 2020 */
+    R.bio_y_2020_retrofit = hasBio(climModel("Model Y", { show_climate: ["bio"] },
+      "LRWYHCEKXLC730074"));
+    R.bio_x_2014 = hasBio(climModel("Model X", null, "5YJXCDE24FF000001")); /* F = 2015 */
+    /* the year is decoded and shown, and the VIN is a tooltip not a label */
+    (() => {
+      const c = climModel("Model 3", null, "LRW3F7FS5RC043917");  /* R = 2024 */
+      c._view = ""; c._built = false; c.hass = c._hass;
+      const odo = c.shadowRoot.getElementById("odo");
+      R.foot_year = odo ? odo.textContent : null;
+      R.foot_vin_title = odo ? odo.getAttribute("title") : null;
+    })();
+    (() => {
+      const c = climModel("Model 3", { }, "LRW3F7FS5RC043917");
+      c._config.show_vin = true;
+      c._view = ""; c._built = false; c.hass = c._hass;
+      const odo = c.shadowRoot.getElementById("odo");
+      R.foot_vin_inline = odo ? odo.textContent : null;
+    })();
     /* every mode button centred, like Defrost Car above them */
     R.mode_buttons_centred = Array.prototype.map.call(
       climModel("Model Y").shadowRoot.querySelectorAll(".defrostBtn"),
@@ -466,6 +490,14 @@ function customStates(p) {
   check("however the model is spelled",           r.bio_off_model_3_spaced, false);
   check("show_climate can force it on",           r.bio_forced_on, true);
   check("hide_climate can force it off",          r.bio_forced_off, false);
+  check("a 2023 Model Y keeps the button",  r.bio_y_2023, true);
+  check("a 2020 Model Y loses it",         r.bio_y_2020, false);
+  check("unless it was retrofitted",       r.bio_y_2020_retrofit, true);
+  check("a 2015 Model X loses it too",     r.bio_x_2014, false);
+  check("the footer shows year and model", r.foot_year.indexOf("2024 Model 3") === 0, true);
+  check("the VIN is a tooltip, not a label",
+    [r.foot_vin_title, r.foot_year.indexOf("LRW") >= 0], ["LRW3F7FS5RC043917", false]);
+  check("show_vin puts it inline",         r.foot_vin_inline.indexOf("LRW3F7FS5RC043917") > 0, true);
   check("every mode button is centred",
     r.mode_buttons_centred.filter((a) => a !== "center"), []);
 

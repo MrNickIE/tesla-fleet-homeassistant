@@ -148,7 +148,16 @@ Per car:
 | `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
-bar), `accent`.
+bar), `accent`, `drive_speed`, `show_vin`.
+
+| Card option | What it does |
+| --- | --- |
+| `drive_speed` | Scales the driving animation. 1 is the default; 1.5 makes the road and wheels half again as fast. The animation is proportional to the car's actual speed, so this only changes the overall pace. |
+| `show_vin` | Prints the VIN in the footer beside the year and model. Off by default: it identifies a specific vehicle and dashboards get screenshotted, so it sits in the footer's tooltip instead unless you ask for it. |
+
+The footer shows the model year, which is decoded from the tenth character of
+the VIN. The card reads the VIN from the car's own entity attributes, so there
+is nothing to configure.
 
 ### Bioweapon Defense Mode
 

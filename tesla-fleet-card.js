@@ -133,7 +133,7 @@
     cop: "climate.{p}cabin_overheat_protection",
   };
 
-  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1 };
+  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false };
   const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
@@ -512,6 +512,15 @@
       </line>`;
     }).join("");
   }
+
+  /* Position 10 of a VIN is the model year. The sequence skips I, O, Q, U and
+     Z to avoid confusion with digits. Checked against Nick's own fleet, whose
+     VINs came out 2020, 2022, 2023, 2023, 2023 and 2024 - and the 2023 Model Y
+     is the one that correctly keeps its Bioweapon button, since the filter
+     went onto the Model Y line in June 2021. */
+  const VIN_YEAR = { A: 2010, B: 2011, C: 2012, D: 2013, E: 2014, F: 2015, G: 2016,
+    H: 2017, J: 2018, K: 2019, L: 2020, M: 2021, N: 2022, P: 2023, R: 2024,
+    S: 2025, T: 2026, V: 2027, W: 2028, X: 2029, Y: 2030 };
 
   const PAINT_COLORS = { red: "#a4232e", grey: "#5c5e62", gray: "#5c5e62", white: "#f2f3f5",
     black: "#171a20", blue: "#1f3a93", silver: "#c8c9cb" };
@@ -998,6 +1007,29 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
+    /* The VIN, from whichever of the car's own entities carries it. Not from
+       the entity registry: tesla_custom puts it straight on the attributes of
+       binary_sensor.<car>_online, so it costs nothing to read and needs no
+       websocket call. Every entity is scanned rather than one hardcoded, so a
+       different integration exposing it elsewhere still works. */
+    _vin() {
+      const car = this._car;
+      if (car.vin) return String(car.vin).toUpperCase();
+      if (car._vin !== undefined) return car._vin;
+      car._vin = null;
+      const ents = car._entities || {};
+      const keys = Object.keys(ents);
+      for (let i = 0; i < keys.length; i++) {
+        const st = this._hass && this._hass.states && this._hass.states[ents[keys[i]]];
+        const v = st && st.attributes && st.attributes.vin;
+        if (typeof v === "string" && v.length === 17) { car._vin = v.toUpperCase(); break; }
+      }
+      return car._vin;
+    }
+    _year() {
+      const v = this._vin();
+      return v ? (VIN_YEAR[v.charAt(9)] || null) : null;
+    }
     /* Which bundled pack is on screen. This used to look only at `images`
        and the auto-detected base, and so missed every car configured with
        the individual image_side / image_charging keys instead of a single
@@ -2255,9 +2287,22 @@
       const hidden = (this._car.hide_climate || []).map((x) => String(x).toLowerCase());
       const shown = (this._car.show_climate || []).map((x) => String(x).toLowerCase());
       const show = (k) => shown.indexOf(k) >= 0 || hidden.indexOf(k) < 0;
+      /* The model decides whether a HEPA filter was ever fitted, and the YEAR
+         decides whether this particular car got one: the Model Y line started
+         fitting them in June 2021, and Model S and X from 2016. Both are
+         retrofittable, which is what show_climate is for. The year is decoded
+         from the VIN the car reports, so an early Model Y now hides the button
+         by itself rather than needing hide_climate set by hand. With no VIN it
+         falls back to the model alone, which is the old behaviour. */
       const model = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
-      const hepa = shown.indexOf("bio") >= 0 ||
-        !(model.indexOf("model3") >= 0 || model === "3" || model.indexOf("m3") === 0);
+      const isY = model.indexOf("modely") >= 0 || model === "y";
+      const isSX = model.indexOf("models") >= 0 || model.indexOf("modelx") >= 0 ||
+                   model === "s" || model === "x";
+      const is3 = model.indexOf("model3") >= 0 || model === "3" || model.indexOf("m3") === 0;
+      const yr = this._year();
+      const hepa = shown.indexOf("bio") >= 0 || (!is3 &&
+        !(isY && yr && yr < 2022) &&
+        !(isSX && yr && yr < 2016));
       let html = "";
       if (has(fans, "bioweapon") && show("bio") && hepa)
         html += `<button class="defrostBtn climX" id="btnBio">${climIcon(`<path d="${ICONS.shield}"/>`)}Bioweapon Defense Mode</button>`;
@@ -2723,8 +2768,21 @@
 
       // footer
       const odo = this._num("odometer");
-      q("odo").textContent = odo === null ? "" :
-        (this._car.model ? this._car.model + " · " : "") + Math.round(odo).toLocaleString() + " " + this._unit("odometer", "km");
+      /* "2024 Model 3 · 82,013 km". The year is decoded from the VIN, which
+         the car reports itself, so nothing needs configuring. The VIN itself
+         sits in the tooltip rather than on the face of the card: it identifies
+         a specific vehicle and people screenshot their dashboards. show_vin
+         puts it inline for anyone who wants it there. */
+      const yr = this._year();
+      const vin = this._vin();
+      const ident = (yr ? yr + " " : "") + (this._car.model || "");
+      const bits = [];
+      if (ident.trim()) bits.push(ident.trim());
+      if (odo !== null) bits.push(Math.round(odo).toLocaleString() + " " + this._unit("odometer", "km"));
+      if (vin && this._config.show_vin) bits.push(vin);
+      const odoEl = q("odo");
+      odoEl.textContent = bits.join(" \u00b7 ");
+      if (vin) odoEl.title = vin; else odoEl.removeAttribute("title");
       const lu = this._st("last_update");
       const rel = lu ? relDur(lu.state) : "";
       q("upd").textContent = rel ? (rel === "just now" ? "Updated just now" : "Updated " + rel + " ago") : "";
