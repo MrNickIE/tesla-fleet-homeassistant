@@ -297,7 +297,7 @@ npm install
 npm test
 ```
 
-95 checks covering entity detection on both integrations, the per-car entity
+99 checks covering entity detection on both integrations, the per-car entity
 overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
 and year, and the driving view including the geometry that keeps the wheels
 rolling at the same speed as the road. It exits non-zero on failure.
@@ -311,15 +311,53 @@ changing detection or the editor, run it.
 
 ## Contributing an image pack
 
-A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`
-(or a generation-qualified folder such as `images/models/3-classic/grey/app/`;
-see [Body generations](#body-generations)):
+A pack is seven photos from the Tesla app:
 
 `topdown.jpg` · `topdown-plugged.jpg` · `topdown-charging.jpg` · `side.jpg` · `side-plugged.jpg` · `side-charging.jpg` · `climate.jpg`
 
 Partial packs are fine - the card probes each slot and uses what it finds.
 
-**If you add a pack, add it to `PACKS_SHIPPED` in `tesla-fleet-card.js` too.** That
-list is what the card shows a user whose model and paint have no artwork yet, so
-it going stale is worse than useless: it either hides a pack that exists, or sends
-someone to one that doesn't.
+### Which folder
+
+**Name the folder after your car's body generation, not just its model.** A
+refresh changes the bodywork, so photos of a Juniper Model Y do not stand in for
+a pre-refresh one, and the unqualified folder is served to both. Contributing to
+the unqualified folder is how a pre-refresh car ends up showing refreshed
+bodywork, which is the one problem this is all here to avoid.
+
+| Your car | Folder |
+|---|---|
+| Model Y, 2025 built or later (Juniper) | `images/models/y-juniper/<paint>/app/` |
+| Model Y, pre-refresh | `images/models/y-classic/<paint>/app/` |
+| Model 3, 2024 or later (Highland) | `images/models/3-highland/<paint>/app/` |
+| Model 3, 2022 or earlier | `images/models/3-classic/<paint>/app/` |
+
+The three generation slugs are `classic`, `juniper` and `highland`. `<paint>` is
+lower case with anything that is not a letter removed, so Deep Blue Metallic is
+`blue` and Pearl White Multi-Coat is `white`. If you are unsure which generation
+you have, open the card, hover the car photo, and it tells you. See
+[Body generations](#body-generations) for how the card works it out.
+
+`images/models/<3|y>/<paint>/app/` without a generation still works and is what
+the three packs bundled today use, for historical reasons. Do not add new packs
+there.
+
+### Then add it to the list
+
+**A new pack must also be added to `PACKS_SHIPPED` in `tesla-fleet-card.js`,
+with its `gen`:**
+
+```js
+const PACKS_SHIPPED = [
+  { model: "Model Y", paint: "red", dir: "models/y/red/app", gen: "classic" },
+  { model: "Model 3", paint: "blue", dir: "models/3-highland/blue/app", gen: "highland" }
+];
+```
+
+That list is what the card shows a user whose model and paint have no artwork
+yet, so it going stale is worse than useless: it either hides a pack that exists,
+or sends someone to one that does not. A pack with no `gen` is treated as
+matching any generation, which is almost never what you want.
+
+Packs are served from `main`, so a merged pack is live for every user straight
+away whatever card version they are running. No release needed.

@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.4";
+  const CARD_VERSION = "1.1.5";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -1449,7 +1449,9 @@
   .battFill { position:absolute; left:1px; top:1px; bottom:1px; background:#8f9296; border-radius:1px; }
   .battFill.chg { background:#4fd07a; } .battFill.low { background:#e0a63c; } .battFill.crit { background:#d53a3a; }
   .noPack { padding:26px 20px 22px; text-align:center; color:#c9ccd1; }
-  .noPackCar { width:74px; height:30px; color:#5b6068; display:block; margin:0 auto 12px; }
+  .noPackCar { width:92px; height:44px; color:#5b6068; display:block; margin:0 auto 6px; }
+  .noPackQuip { font-size:12px; font-style:italic; line-height:1.5; color:#71767d;
+                max-width:330px; margin:0 auto 13px; }
   .noPackTitle { font-size:15px; font-weight:600; color:#e9eaec; margin-bottom:7px; }
   .noPackBody { font-size:12.8px; line-height:1.5; max-width:330px; margin:0 auto 12px; }
   .noPackBody b { color:#e9eaec; }
@@ -1461,6 +1463,7 @@
                 background:#141619; border:1px solid #26282c; border-radius:6px;
                 padding:6px 9px; display:inline-block; margin-bottom:12px; }
   .noPack a { color:#5ea0ff; }
+  .noPack a.packCta { font-size:14.5px; font-weight:600; }
   .diag { margin-top:7px; padding:8px 10px; border-radius:7px; font-size:12.5px; line-height:1.45;
           background:#3a2411; border:1px solid #6b4318; color:#f0c99a; max-width:520px; }
   .diag code { background:#00000055; padding:1px 4px; border-radius:3px; font-size:12px; }
@@ -2382,19 +2385,32 @@
       const car = this._car;
       const dir = /3/.test(String(car.model || "")) ? "3" : "y";
       const slug = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
-      const path = "images/models/" + dir + "/" + (slug || "&lt;paint&gt;") + "/app/";
+      /* Qualify the suggested folder with the generation whenever the card knows
+         it, which it usually does because the VIN gave it the model year. The
+         unqualified folder is served to BOTH generations, so telling a Juniper
+         owner to fill models/y/<paint>/app is telling them to create the exact
+         wrong-bodywork problem this panel exists to end. */
+      const gen = this._generation();
+      const genDir = gen && GEN_LABEL[gen] ? dir + "-" + gen : dir;
+      const path = "images/models/" + genDir + "/" + (slug || "&lt;paint&gt;") + "/app/";
       const have = PACKS_SHIPPED.map((p) =>
         `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}` +
         (p.gen ? ` &middot; ${esc(GEN_LABEL[p.gen] || p.gen)}` : "") + `</li>`).join("");
       return `
 <div class="noPack">
-  <svg class="noPackCar" viewBox="0 0 64 26" aria-hidden="true">
-    <path d="M3 19 L6 12 C8 8 12 6 20 6 h16 c8 0 13 2 17 6 l4 7"
-          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M2 19 h60" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="17" cy="19" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
-    <circle cx="47" cy="19" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+  <svg class="noPackCar" viewBox="0 0 80 38" aria-hidden="true">
+    <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 26 C6 17 14 11 27 10 C39 9 52 10 62 14 C70 17 73 21 72 27 C58 30 22 30 7 26 Z"/>
+      <path d="M30 10 C33 3 43 2 48 6 C51 8 52 11 52 13"/>
+      <circle cx="23" cy="31" r="5.2"/>
+      <circle cx="57" cy="29" r="2.6"/>
+      <path d="M2 35 L76 32"/>
+      <path d="M45 30 L44 36 M50 30 L51 35"/>
+    </g>
   </svg>
+  <div class="noPackQuip">This project started as a vibecoding test, and somewhere along the way
+    Nick said &ldquo;you drew a spaceship&rdquo; - we have come a long way since then, but the
+    art side of the house needs your help.</div>
   <div class="noPackTitle">No image pack yet</div>
   <div class="noPackBody">Nothing bundled for <b>${esc(car.model || "this model")}</b>
     in <b>${esc(car.paint || "no paint set")}</b>. Everything else on this card works -
@@ -2404,7 +2420,7 @@
   <div class="noPackPath">${path}</div>
   <div class="noPackBody">A pack is seven photos from the Tesla app. If you own this car,
     you are the right person to build one -
-    <a href="https://github.com/MrNickIE/tesla-fleet-homeassistant" target="_blank" rel="noopener">contribute a pack</a>.</div>
+    <a class="packCta" href="https://github.com/MrNickIE/tesla-fleet-homeassistant#contributing-an-image-pack" target="_blank" rel="noopener">contribute a pack</a>.</div>
 </div>`;
     }
 

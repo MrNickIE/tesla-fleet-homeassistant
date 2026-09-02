@@ -234,6 +234,23 @@ function customStates(p) {
       const im = c.shadowRoot.getElementById("restImg");
       R.gen_match_title = im ? im.title : "(no image)";
     })();
+    /* The no-pack panel's suggested folder must carry the generation. The
+       unqualified folder is served to BOTH generations, so sending a Juniper
+       owner there would have them create the wrong-bodywork problem the panel
+       exists to end. This panel always renders in a headless container, because
+       the image probe cannot reach the pack CDN. */
+    const packPanel = (model, vin, extra) => {
+      const c = climModel(model, extra, vin);
+      c._view = ""; c._built = false; c.hass = c._hass;
+      const root = c.shadowRoot;
+      const path = root.querySelector(".noPackPath");
+      const cta = root.querySelector("a.packCta");
+      return { path: path ? path.textContent.trim() : null,
+               href: cta ? cta.getAttribute("href") : null };
+    };
+    R.pack_juniper = packPanel("Model Y", "LRWYHCEKXTC730074", { paint: "blue" });
+    R.pack_classic = packPanel("Model Y", "LRWYHCEKXPC730074", { paint: "blue" });
+    R.pack_unknown = packPanel("Model 3", "LRW3F7FS4PC762296", { paint: "blue" });
     /* the year is decoded and shown, and the VIN is a tooltip not a label */
     (() => {
       const c = climModel("Model 3", null, "LRW3F7FS5RC043917");  /* R = 2024 */
@@ -517,6 +534,16 @@ function customStates(p) {
   check("config beats the VIN",            r.gen_override, "juniper");
   check("a mismatch is named on the image", r.gen_mismatch_title.indexOf("Juniper") >= 0, true);
   check("a matching pack says nothing",    r.gen_match_title, "");
+  check("a Juniper is sent to the Juniper folder",
+    r.pack_juniper.path, "images/models/y-juniper/blue/app/");
+  check("a pre-refresh car is sent to its own folder",
+    r.pack_classic.path, "images/models/y-classic/blue/app/");
+  /* A 2023 Model 3 could be either car, so there is no generation to qualify
+     with. The unqualified folder is the honest answer, not a guessed one. */
+  check("an unknown generation is not guessed at",
+    r.pack_unknown.path, "images/models/3/blue/app/");
+  check("the contribute link lands on the instructions",
+    String(r.pack_juniper.href).indexOf("#contributing-an-image-pack") > 0, true);
   check("every mode button is centred",
     r.mode_buttons_centred.filter((a) => a !== "center"), []);
 
