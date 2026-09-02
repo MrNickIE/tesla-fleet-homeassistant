@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.3";
+  const CARD_VERSION = "1.1.4";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -116,11 +116,394 @@
     cop: "climate.{p}cabin_overheat_protection",
   };
 
-  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], paint: "", prefix: "", entities: {} };
+  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
+
+  /* ---- driving view ---------------------------------------------------
+     Measured off a 60fps screen recording of the Tesla app's driving screen
+     (884x1920). Every number here came off that file rather than out of my
+     head, because the last several times I guessed at this card's visuals
+     from reading code I was wrong:
+
+       cycle        0.833 s   autocorrelation, identical at five probe points
+       dash duty    1:2       duty cycle 0.32 at every probe
+       dash colour  #2b2a2b   on a near-black ground
+       stroke       6.4px of a 488px-wide car -> 1.31% of car width
+       period       ~420px    -> 0.86 car widths between dash starts
+       wheels       rotate counter-clockwise, by polar cross-correlation at
+                    r=10..26 on both hubs
+
+     The angle is NOT a constant. In the app the road lines sit at -24.6 deg
+     and the car's own wheelbase sits at -24.1 deg: the markings run parallel
+     to the direction of travel, so they track the camera angle of whatever
+     render you are looking at. The bundled pack photo is a tighter, flatter
+     three-quarter view whose wheelbase runs at about -12.6 deg, so copying
+     the app's -24.6 across would have laid the road at a visibly wrong angle
+     on the car it is drawn under. Each pack carries its own.
+
+     What the app does and this card cannot: the app swaps to a 3D render, so
+     its wheels genuinely turn and the car sits in the middle of a wide road.
+     Our car is a photograph that nearly fills its frame, so only the near
+     lane marking is in shot and the wheels get a swept arc drawn over them
+     rather than real rotation. */
+  const DRIVE = {
+    /* The app runs 0.833s per dash period, so a marking sweeps past every
+       0.83s. Measured, and wrong here: on a card a fraction of a phone
+       screen's size that reads as frantic, which is what Nick called it. At
+       1.7s a marking passes about every second and a half and it settles
+       down. A road spec can override with its own cycle. */
+    /* THE ROAD SPEED IS PROPORTIONAL TO THE CAR'S, and refCycle is the one
+       number that sets it. Two tiers came first, from Nick's "below 20km is
+       slow, above this it should be double", and two tiers were wrong: at 40
+       and at 100 km/h you got exactly the same animation, so 40 read as half
+       its real speed. Nick, watching Rachel: "Rachel is doing about 40kmph
+       now and it looks about 20Kph in the animation".
+
+       So: one dash period per refCycle seconds at refKph, scaled inversely
+       with speed. Doubling the speed halves the period, all the way up and
+       down, with a floor so a motorway does not strobe and a ceiling so a
+       crawl does not look stopped.
+
+       refCycle is deliberately the ONLY calibration number, and the card
+       config can scale it live with drive_speed, so tuning this by eye needs
+       a dashboard edit rather than a new build. */
+    refKph: 40,            // the speed refCycle is calibrated at
+    refCycle: 0.43,        // seconds per dash period at refKph  <-- THE KNOB
+    /* The floor was 0.26 and the test suite caught that as a real fault, not
+       a wrong expectation: 80 km/h already hit it, so everything above about
+       66 km/h flattened to one speed and reproduced the exact complaint this
+       change exists to fix. At 0.12 a dash period is still seven frames at
+       60fps, and proportionality survives to about 143 km/h. */
+    minCycle: 0.12,        // floor: below this the dashes strobe
+    maxCycle: 3.4,         // ceiling: a crawl still shows movement
+    dash: 1 / 3,           // fraction of the period that is painted
+    colour: "#2b2a2b",
+    /* The app's dash period is 0.86 car widths, which in its wide framing
+       leaves 2.3 periods on screen. The pack photo is cropped far tighter, so
+       0.86 put ONE dash in shot and it read as a scratch on the picture
+       rather than a road. Halved, so the same number of dashes is visible as
+       the app shows - keeping the appearance rather than the constant. */
+    period: 0.45,          // dash period as a fraction of car width
+    width: 0.0131          // stroke width as a fraction of car width
+  };
+
+  /* Per-pack ground plane, in Rest view units (233 x 108). angle is the line
+     through the two tyre contact patches - the lowest point of the car's
+     silhouette under each wheel - because a lane marking on the ground runs
+     parallel to the direction of travel, and so does the line joining the
+     front and rear contact patches on the same side of the car.
+
+     Contact patches beat hub centres and hub bottoms here. The far wheel is
+     drawn smaller by perspective, so a line through the hubs is too shallow,
+     and the wheels are ellipses so the bottom of a fitted circle is not where
+     the tyre meets the road. Reading the silhouette directly is stable to
+     0.4 degrees across luma thresholds from 30 to 38.
+
+     The three packs come out at -21.90, -21.78 and -21.78, which is the check
+     that this is measured and not invented: one camera rig photographing
+     three different cars should agree, and it does, to about a tenth of a
+     degree. (Earlier eyeball readings off a grid gave -12.6, -33.6 and -20.4.
+     All three were wrong. Measure the pixels.) The app's own driving render
+     sits at -24.6 because it is a different camera, which is exactly why this
+     cannot be one shared constant.
+
+     lines is [y, stroke] where y is the marking's height at the middle of the
+     frame, sitting about 7 units in front of the car's own ground line. One
+     marking, not two: two read as a hatch rather than a road. Absolute rather
+     than relative to the runtime car box, because that box is a luma
+     threshold that swallows the shadow by a different amount in each photo. */
+  const PACK_ROAD = {
+    "models/y/red/app":   { angle: -21.9, lines: [[93.3, 2.2]] },
+    "models/y/white/app": { angle: -21.8, lines: [[105.1, 2.2]] },
+    "models/3/grey/app":  { angle: -21.8, lines: [[97.6, 2.2]] }
+  };
+  /* An unmeasured photo still gets a marking: the measured car box's bottom
+     edge lands about 2 units below the tyre contact line on all three bundled
+     packs, so it stands in for the ground, and -21.8 is what they agree on. */
+  const ROAD_DEFAULT = { angle: -21.8, drops: [[9, 2.2]] };
+
+  /* ---- the wheels ----------------------------------------------------
+     The first attempt at this drew four faint arcs over each hub and span
+     them. Nick's verdict was one word: horrific, and he was right, because
+     it put invented geometry on top of a photographed wheel.
+
+     This rotates the photograph's own pixels instead. The pack image is
+     drawn a second time inside the overlay, clipped to the wheel, and
+     spun about the hub, so the spokes that turn are the real ones with
+     their real colour and lighting.
+
+     Two things have to be right or it wobbles instead of turning.
+
+     ONE: the wheel is an ELLIPSE, so the pixels must be un-squashed to a
+     circle, rotated, and squashed back. Getting the squash AXIS wrong was
+     the mistake that cost the most here. I assumed it ran along the car's
+     direction of travel, on the reasoning that the wheel is a circle in
+     the car's side plane. That is true and still gives the wrong answer:
+     under projection the two in-plane directions do not stay
+     perpendicular, so the ellipse's own principal axes are what a
+     rotation has to be built from, and they are nowhere near the travel
+     line. These wheels lean 5 to 23 degrees off vertical. Nick spotted it
+     immediately from an overlay: "those overlap lines you drew are not
+     matching the wheel shape".
+
+     Each wheel is therefore a full ellipse: centre, major semi-axis a,
+     minor semi-axis b, and the major axis angle. Fitted by second moments
+     over the wheel's own pixels, re-masked to the fitted ellipse and
+     refitted four times so the centre settles onto the hub. A centre off
+     by a unit is a visible wobble, so this is worth doing properly.
+
+     TWO: the rear wheel cannot be fitted from its own pixels, and must be
+     DERIVED FROM THE FRONT ONE. Both near-side wheels lie in the same plane
+     of the car, and these renders are close enough to a long lens that
+     circles in that plane project to ellipses of the same shape and lean,
+     differing only in position and size. Fitting the rear independently gave
+     91 degrees against the front's 109, and far too narrow. Nick spotted that
+     from an overlay too: "the back is still off. They are BOTH the same
+     angle.... (as the front)". He was right, and the reason the fit failed is
+     instructive: the rear tyre is dark against dark ground on one side and
+     dark shadow on the other, so a mask loses its width, while leaking down
+     into the shadow gains it height. Both errors push the same way, towards
+     an ellipse too narrow and too upright, which is exactly what came out.
+
+     So a pack stores the front ellipse in full and the rear as nothing but a
+     centre and a scale. The shape and the lean are shared by construction,
+     which is the point: the invariant is in the data model rather than in two
+     numbers that have to agree, so it cannot drift apart again.
+
+     The rear also takes the front's PIXELS. It is the same wheel, it is only
+     about sixteen source pixels across, and it is the more obliquely viewed
+     of the two, so un-squashing its own pixels turns them into vertical
+     streaks. Borrowing the front's gives several times the detail with the
+     correct perspective; a per-pack brightness lift covers the rear sitting
+     in slightly less shadow.
+
+     Three copies a few degrees apart at a third opacity each give a light
+     motion blur, which is what a camera sees and which also softens what
+     is left of the resampling. */
+  const WHEEL = {
+    /* No fixed duration. A wheel that does not roll with the road it is on is
+       the first thing the eye picks up, and mine did not: Nick, watching Patsy
+       at speed, "the wheel speed is also slighly faster than the road speed I
+       think". Measured, it was 1.76 times the road, so the rotation period is
+       now DERIVED from the road rather than being a second free number.
+
+       One revolution advances the contact patch by the wheel's circumference,
+       and in the image that distance is 2*pi times the ellipse's SEMI-DIAMETER
+       ALONG THE DIRECTION OF TRAVEL. That is exact, and it is exact for a
+       pleasing reason: the contact point is where the rim's tangent runs
+       parallel to the road, the tangent at a point of an ellipse is parallel
+       to its conjugate diameter, and the speed there works out to the length
+       of the semi-diameter in the direction of travel.
+
+       Two wrong answers were tried first, and both were plausible. Taking the
+       minor semi-axis b is 12% low, because the minor axis is not quite the
+       travel direction. Taking the rim speed at the ellipse's LOWEST point is
+       worse and misleading: the lowest point of any curve has a horizontal
+       tangent, so that always claims the wheel is running horizontally, and
+       comparing it against a road at -21.9 degrees looked like a 158 degree
+       error that was really the wrong point.
+
+       Set that against the road's own speed, one dash period per cycle, and
+       the period falls out. It stays right at both tiers and on any pack. */
+    /* The wheel must NOT have a floor of its own. It had 0.18s, and a speed
+       sweep showed the road running at 0.12s at 120 km/h while the wheel sat
+       clamped at 0.18 - decoupled by half, which is the very fault this
+       derivation was written to fix, just moved up the speed range. The road's
+       own floor is the single limit now.
+
+       Strobing is handled by BLUR instead, which is the honest fix. A wheel
+       with ten repeating features aliases at 60fps once it turns more than 18
+       degrees per frame, and 6/dur degrees per frame means anything under
+       about 0.33s per revolution aliases - roughly 55 km/h and up. An aliased
+       wheel reads as slow, stopped, or backwards, so this was very likely part
+       of why the animation still felt slow after the road was right.
+
+       So the motion blur widens with speed: the smear is kept wider than the
+       per-frame rotation, which leaves nothing sharp to alias, and a fast
+       wheel becomes a smooth ring exactly as a camera records one. */
+    minDur: 0.05,    // effectively never binds; the road's floor governs
+    blurCover: 2.2,  // smear width as a multiple of the per-frame rotation
+    maxSpread: 130,  // degrees, beyond which the ring is smeared enough
+    maxCopies: 5,    // each copy is a full image draw; keep the cost bounded
+    clip: 0.74,      // fraction of the fitted ellipse that rotates
+    copies: 3,       // stacked copies making the motion blur
+    spread: 18       // degrees between the first and last copy
+  };
+
+  /* front: [cx, cy, a, b, majorAngle] in Rest view units, where a is the
+     major semi-axis, b the minor, and majorAngle is degrees from the positive
+     x-axis with y downward. rear: [cx, cy, scale] - it borrows the front's
+     shape and lean, scaled. lift: the rear's brightness relative to the
+     front. Fitted on the FRONT wheel only, which is the one that sits against
+     bright bodywork and so masks cleanly.
+
+     The rear centre and scale are then found by TEMPLATE MATCHING: warp the
+     front wheel's own pixels over the rear at each candidate centre, scale
+     and rotation, and keep the best normalised cross-correlation. That is the
+     right tool here because it uses every pixel of the wheel rather than a
+     threshold, it is untroubled by the low contrast that defeated masking,
+     and it measures exactly what the rendering does. It scores 0.78 on the
+     red Y and 0.84 on the Model 3, which is a firm match, and 0.57 on the
+     white Y, whose flat aero covers carry less structure to match.
+
+     The method was validated before it was trusted. Nick had confirmed that
+     the white Y's rear wheel sat correctly and the other two did not ("The
+     white one is the correct position! use that!"), so the matcher was run on
+     the white one first: it moved that centre by a tenth of a view unit,
+     while shifting the other two by up to 2.7. Agreeing with the known-good
+     case is what makes the other two answers worth believing. Eyeballing had
+     by that point produced three different verdicts on the same wheel. */
+  const PACK_WHEELS = {
+    "models/y/red/app":   { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
+                            rear: [185.2, 47.8, 0.85] },
+    "models/y/white/app": { lift: 1.11, front: [108.8, 91.7, 12.27, 8.19, 113.4],
+                            rear: [192.4, 59.0, 0.82] },
+    "models/3/grey/app":  { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
+                            rear: [187.8, 50.7, 0.86] }
+  };
+
+  /* expand rear: [cx, cy, scale] into a full ellipse using the front's shape */
+  function rearEllipse(front, rear) {
+    if (!front || !rear || front.length < 5 || rear.length < 3) return null;
+    const s = rear[2] > 0 ? rear[2] : 1;
+    return [rear[0], rear[1], front[2] * s, front[3] * s, front[4]];
+  }
+
+  /* Rotate the wheel photographed at `src` and land it in the ellipse `dst`.
+     Both are [cx, cy, a, b, phi]. The transform is M . rotate . M-inverse,
+     where M squashes a circle into the ellipse: that is the only form that
+     turns an ellipse in its own plane rather than skewing it. */
+  function spinWheel(id, src, dst, lift, dur) {
+    if (!src || !dst || src.length < 5 || dst.length < 5) return "";
+    const [sx, sy, sa, sb, sp] = src, [dx, dy, da, db, dp] = dst;
+    if (!(sa > 0 && sb > 0 && da > 0 && db > 0)) return "";
+    const scale = da / sa;
+    /* outermost: squash into dst's ellipse and size it to dst */
+    const out = `translate(${dx} ${dy}) rotate(${dp}) scale(1 ${(db / da).toFixed(4)})` +
+                ` rotate(${-dp}) scale(${scale.toFixed(4)})`;
+    /* innermost: un-squash src's ellipse to a true circle about its hub */
+    const inn = `rotate(${sp}) scale(1 ${(sa / sb).toFixed(4)}) rotate(${-sp})` +
+                ` translate(${-sx} ${-sy})`;
+    /* A stopped wheel is SHARP: the three offset copies exist to make a motion
+       blur, and there is no motion to blur, so a standstill gets one copy at
+       full opacity and no rotation. */
+    const moving = dur > 0;
+    /* per-frame rotation at 60fps, and a smear wide enough to cover it */
+    const perFrame = moving ? 6 / dur : 0;
+    const spread = moving
+      ? Math.min(WHEEL.maxSpread, Math.max(WHEEL.spread, WHEEL.blurCover * perFrame))
+      : 0;
+    const n = moving
+      ? Math.max(WHEEL.copies, Math.min(WHEEL.maxCopies, Math.ceil(spread / 22) + 1))
+      : 1;
+    let layers = "";
+    for (let i = 0; i < n; i++) {
+      const off = n === 1 ? 0 : -spread / 2 + spread * i / (n - 1);
+      layers += `<g transform="${out}" opacity="${(1 / n).toFixed(3)}">
+        <g transform="rotate(${off.toFixed(2)})">
+          ${moving ? `<animateTransform attributeName="transform" type="rotate"
+            from="${off.toFixed(2)}" to="${(off - 360).toFixed(2)}"
+            dur="${dur}s" repeatCount="indefinite"/>` : ""}
+          <g transform="${inn}"${lift ? ` filter="url(#dwLift)"` : ""}>
+            <use href="#dwImg"/>
+          </g>
+        </g></g>`;
+    }
+    /* The clip is on a wrapping group with no transform of its own, so it is
+       unambiguously in view space. Kept inside the rim, which also means the
+       pixels swept in from the edges are more wheel and never bodywork. */
+    const c = WHEEL.clip;
+    return `<clipPath id="dwC${id}"><ellipse cx="${dx}" cy="${dy}" rx="${(da * c).toFixed(2)}"` +
+      ` ry="${(db * c).toFixed(2)}" transform="rotate(${dp} ${dx} ${dy})"/></clipPath>` +
+      `<g clip-path="url(#dwC${id})">${layers}</g>`;
+  }
+
+  /* seconds per revolution such that the contact patch keeps pace with the
+     road it is drawn on */
+  function wheelPeriod(wheels, cw, cycle, roadAngle) {
+    const f = wheels && wheels.front;
+    if (!f || f.length < 5 || !(cycle > 0)) return null;
+    const a = f[2], b = f[3];
+    if (!(a > 0 && b > 0)) return null;
+    /* the ellipse's semi-diameter along the direction of travel */
+    const al = ((roadAngle || 0) - f[4]) * Math.PI / 180;
+    const ca = Math.cos(al) / a, sa = Math.sin(al) / b;
+    const q = ca * ca + sa * sa;
+    if (!(q > 0)) return null;
+    const perRev = 2 * Math.PI / Math.sqrt(q);
+    const roadSpeed = Math.max(8, cw * DRIVE.period) / cycle;
+    if (!(roadSpeed > 0)) return null;
+    return Math.max(WHEEL.minDur, perRev / roadSpeed);
+  }
+
+  function driveWheels(wheels, src, dur) {
+    if (!wheels || !wheels.front || !wheels.rear || !src) return "";
+    const lift = wheels.lift || 1;
+    return `<defs>
+      <image id="dwImg" href="${src}" x="0" y="0" width="233" height="108" preserveAspectRatio="none"/>
+      <filter id="dwLift" x="-10%" y="-10%" width="120%" height="120%">
+        <feComponentTransfer>
+          <feFuncR type="linear" slope="${lift}"/><feFuncG type="linear" slope="${lift}"/>
+          <feFuncB type="linear" slope="${lift}"/>
+        </feComponentTransfer>
+      </filter></defs>` +
+      spinWheel("f", wheels.front, wheels.front, 0, dur) +
+      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1, dur);
+  }
+
+  /* Dashed lane markings sliding along their own axis. The slide is
+     stroke-dashoffset rather than a transform, so the dashes travel along
+     the line instead of the whole line drifting across the frame. */
+  function driveRoad(w, h, box, road, cycle) {
+    if (!road || !((road.lines && road.lines.length) || (road.drops && road.drops.length))) return "";
+    /* the car box only sets the dash scale - one dash period is 0.86 car
+       widths, so the road keeps its proportions whatever pack is loaded */
+    const cw = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : w * 0.71;
+    const rad = (road.angle || 0) * Math.PI / 180;
+    const dx = Math.cos(rad), dy = Math.sin(rad);
+    const len = (Math.abs(w * dx) + Math.abs(h * dy)) * 2.2;
+    const period = Math.max(8, cw * DRIVE.period);
+    const on = period * DRIVE.dash;
+    const cx = w / 2;
+    /* An explicit `lines` was measured on that photo and is trusted as-is.
+       A `drops` default is derived from the measured car box, whose bottom
+       edge includes the shadow, so on a tightly cropped photo it can land
+       below the frame and the marking is simply never seen. That is exactly
+       what happened to Patsy. Clamped so a default can always be seen. */
+    const spec = road.lines ||
+      (road.drops || []).map((d) => [Math.min(h - 3,
+        (box && box.length === 4 ? box[3] : h * 0.85) + d[0]), d[1]]);
+    return spec.map((ln, i) => {
+      const cy = ln[0];
+      const sw = Math.max(0.8, ln[1] || cw * DRIVE.width);
+      const off = i * period * 0.37;
+      /* cycle 0 draws the marking without moving it: a car stopped at a
+         junction is still in gear and still on a road, so the road stays and
+         the motion goes. Nick: "At 0, the animation should stop." */
+      const anim = cycle > 0
+        ? `<animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
+                 to="${(off - period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>`
+        : "";
+      return `<line x1="${(cx - dx * len / 2).toFixed(1)}" y1="${(cy - dy * len / 2).toFixed(1)}"
+            x2="${(cx + dx * len / 2).toFixed(1)}" y2="${(cy + dy * len / 2).toFixed(1)}"
+            stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
+            stroke-dashoffset="${off.toFixed(1)}"
+            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">${anim}
+      </line>`;
+    }).join("");
+  }
+
+  /* Position 10 of a VIN is the model year. The sequence skips I, O, Q, U and
+     Z to avoid confusion with digits. Checked against Nick's own fleet, whose
+     VINs came out 2020, 2022, 2023, 2023, 2023 and 2024 - and the 2023 Model Y
+     is the one that correctly keeps its Bioweapon button, since the filter
+     went onto the Model Y line in June 2021. */
+  const VIN_YEAR = { A: 2010, B: 2011, C: 2012, D: 2013, E: 2014, F: 2015, G: 2016,
+    H: 2017, J: 2018, K: 2019, L: 2020, M: 2021, N: 2022, P: 2023, R: 2024,
+    S: 2025, T: 2026, V: 2027, W: 2028, X: 2029, Y: 2030 };
 
   const PAINT_COLORS = { red: "#a4232e", grey: "#5c5e62", gray: "#5c5e62", white: "#f2f3f5",
     black: "#171a20", blue: "#1f3a93", silver: "#c8c9cb" };
@@ -129,11 +512,25 @@
      lists these when a car has no pack of its own, so nobody is left guessing
      what exists - and so an unsupported combination is a nudge to build one
      rather than a dead end. */
+  /* Packs that ship with the repo. `gen` matters and was missing: the two
+     Model Y packs are DIFFERENT GENERATIONS - the red is the pre-refresh car
+     and the white is the 2025 refresh, "Juniper" - and with model and paint as
+     the only keys, a pre-refresh white Y was being handed Juniper bodywork and
+     a Juniper red Y the old shape, silently. Nick spotted it from the images.
+
+     Recording the generation does three things: a contributed pack at a
+     generation-qualified path is now preferred automatically, the card can say
+     when it is showing the wrong one, and the README can be honest about it.
+     The fallback is deliberately unchanged - right colour, wrong bodywork -
+     because paint is what the user actually configured and a wrong colour is
+     the more jarring of the two. */
   const PACKS_SHIPPED = [
-    { model: "Model Y", paint: "red", dir: "models/y/red/app" },
-    { model: "Model Y", paint: "white", dir: "models/y/white/app" },
-    { model: "Model 3", paint: "grey", dir: "models/3/grey/app" }
+    { model: "Model Y", paint: "red", dir: "models/y/red/app", gen: "classic" },
+    { model: "Model Y", paint: "white", dir: "models/y/white/app", gen: "juniper" },
+    { model: "Model 3", paint: "grey", dir: "models/3/grey/app", gen: "highland" }
   ];
+  const GEN_LABEL = { classic: "pre-refresh", juniper: "Juniper (2025 refresh)",
+                      highland: "Highland (2024 refresh)" };
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
 
   /* Stable, key-order-independent serialisation. Used only to tell whether a
@@ -248,7 +645,7 @@
     return { mode, level: lvl === undefined ? 1 : lvl };
   }
 
-  const HEAT_COL = "#e64545", COOL_COL = "#4aa3ff", IDLE_COL = "#a9adb2";
+  const HEAT_COL = "#e43335", COOL_COL = "#385ec4", IDLE_COL = "#90908e";
 
   /* -- Defrost glow ----------------------------------------------------------
      Measured off Nick's own app screen recording (ffmpeg, 15fps sampling of a
@@ -607,6 +1004,125 @@
        (/local/, /hacsfiles/) reads fine; raw.githubusercontent.com sends
        access-control-allow-origin:*, so crossOrigin="anonymous" works there
        too. Anything else falls back to the traced calibration. */
+    /* The VIN, from whichever of the car's own entities carries it. Not from
+       the entity registry: tesla_custom puts it straight on the attributes of
+       binary_sensor.<car>_online, so it costs nothing to read and needs no
+       websocket call. Every entity is scanned rather than one hardcoded, so a
+       different integration exposing it elsewhere still works. */
+    _vin() {
+      const car = this._car;
+      if (car.vin) return String(car.vin).toUpperCase();
+      if (car._vin !== undefined) return car._vin;
+      car._vin = null;
+      const ents = car._entities || {};
+      const keys = Object.keys(ents);
+      for (let i = 0; i < keys.length; i++) {
+        const st = this._hass && this._hass.states && this._hass.states[ents[keys[i]]];
+        const v = st && st.attributes && st.attributes.vin;
+        if (typeof v === "string" && v.length === 17) { car._vin = v.toUpperCase(); break; }
+      }
+      return car._vin;
+    }
+    /* Which body generation this car is, for picking a pack. From config if
+       given, otherwise from the VIN's model year, and ONLY where that mapping
+       is unambiguous.
+
+       Model Y is clean: Tesla brands the 2025-built Juniper as a 2026 model, so
+       VIN position 10 of T or later is Juniper and S or earlier is pre-refresh.
+       Model 3 is not: Highland reached North America in January 2024, so 2024
+       and later is Highland and 2022 and earlier is not, but a 2023 could be
+       either and this returns null rather than guessing. A null simply means
+       "no generation preference", which is the behaviour that existed before. */
+    _generation() {
+      const cfg = String(this._car.generation || this._car.gen || "").toLowerCase();
+      if (cfg) return cfg;
+      const yr = this._year();
+      if (!yr) return null;
+      const m = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
+      if (m.indexOf("modely") >= 0 || m === "y") return yr >= 2026 ? "juniper" : "classic";
+      if (m.indexOf("model3") >= 0 || m === "3") {
+        if (yr >= 2024) return "highland";
+        if (yr <= 2022) return "classic";
+        return null;                       /* 2023 is genuinely ambiguous */
+      }
+      return null;
+    }
+    /* the generation of the pack actually on screen, where we know it */
+    _packGen() {
+      const dir = String(this._car.images || this._car._autoBase || "");
+      if (!dir) return null;
+      for (let i = 0; i < PACKS_SHIPPED.length; i++) {
+        if (dir.indexOf(PACKS_SHIPPED[i].dir) >= 0) return PACKS_SHIPPED[i].gen || null;
+      }
+      return null;
+    }
+    /* "your car is a Juniper but these are pre-refresh photos", or null */
+    _genMismatch() {
+      const want = this._generation(), got = this._packGen();
+      if (!want || !got || want === got) return null;
+      return { want: GEN_LABEL[want] || want, got: GEN_LABEL[got] || got };
+    }
+    _year() {
+      const v = this._vin();
+      return v ? (VIN_YEAR[v.charAt(9)] || null) : null;
+    }
+    /* Which bundled pack is on screen. This used to look only at `images`
+       and the auto-detected base, and so missed every car configured with
+       the individual image_side / image_charging keys instead of a single
+       `images` directory - which is how Patsy is set up. The result was
+       that the Model Y cars matched no pack, got no wheels, and had their
+       road line pushed off the bottom of the frame, so Nick saw the whole
+       animation only on the Model 3s. The URL of the photo being displayed
+       is the reliable place to look, because it is the thing that actually
+       decides which car is on screen. */
+    _packKey(src) {
+      const hay = String(this._car.images || "") + " " +
+                  String(this._car._autoBase || "") + " " + String(src || "");
+      return Object.keys(PACK_WHEELS).filter((k) => hay.indexOf(k) >= 0)[0] || null;
+    }
+    /* Wheel ellipses for the photo we are showing. Only the bundled packs
+       were measured, and a wrong ellipse is a visible wobble, so somebody
+       else's photo gets still wheels rather than a guess. */
+    _wheels(src) {
+      if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
+      const cfg = this._car.wheels;
+      if (cfg && cfg.front && cfg.rear) return cfg;
+      const hit = this._packKey(src);
+      return hit ? PACK_WHEELS[hit] : null;
+    }
+    /* The ground plane for the photo we are actually showing.
+       drive_motion: off suppresses the moving road altogether. */
+    _road(src) {
+      if (String(this._car.drive_motion || "auto").toLowerCase() === "off") return null;
+      const cfg = this._car.road;
+      if (cfg && typeof cfg === "object" && cfg.lines) return cfg;
+      const hit = this._packKey(src);
+      return hit ? PACK_ROAD[hit] : ROAD_DEFAULT;
+    }
+    /* Speed in km/h whatever the car displays, for choosing the animation
+       tier. Kept apart from _speed(), which formats it for the eye. */
+    /* km/h whatever the car displays, so the tier threshold is a real speed
+       rather than 20 of whichever unit happens to be configured.
+
+       Returns 0 for a car that is genuinely stopped and null only when the
+       speed is not available at all. The difference matters: a stopped car
+       freezes the animation, a car whose speed we cannot read falls back to
+       moving, because guessing "stopped" would strand the road mid-slide on
+       any integration that does not report speed. */
+    _speedKph() {
+      const t = this._st("location");
+      const at = t && t.attributes;
+      const raw = at && ("speed" in at) ? at.speed : undefined;
+      /* tesla_custom reports speed as NULL on a parked car, not 0, checked on
+         Emmanuel the moment he parked. So a null that is present means "not
+         moving"; only a missing key means "this integration does not tell us",
+         and that falls back to animating rather than freezing. */
+      if (raw === undefined) return null;
+      if (raw === null || raw === "") return 0;
+      const v = Number(raw);
+      if (!isFinite(v) || v < 0) return 0;
+      return this._imperial() ? v * 1.609344 : v;
+    }
     _carBox(url, sfx) {
       if (!url) return DF_CALIB[sfx];
       this._boxes = this._boxes || {};
@@ -677,6 +1193,36 @@
     }
 
     /* prefer the level select, fall back to the plain switch */
+    /* mph off the tracker, shown in the unit the range sensor uses */
+    _speed() {
+      const t = this._st("location");
+      const raw = t && t.attributes ? t.attributes.speed : null;
+      if (raw === null || raw === undefined || raw === "") return null;
+      return this._speedFrom(raw);
+    }
+    /* MEASURED, not assumed. This used to treat the value as mph and convert
+       it, on the reasoning that Tesla's API reports mph regardless of the
+       car's own units. That was wrong, and it was flagged at the time as the
+       one number here nobody had watched a car produce.
+
+       Settled with the odometer, which is the honest instrument: Emmanuel
+       covered 1.40013 km in exactly 180 seconds, a true average of 28.0 km/h,
+       while the speed field read 40 falling to 22 over the same window and
+       Nick, reading the car, called out numbers averaging 30.3. Had the field
+       been mph the true speed would have been about 50 km/h, so that is out by
+       a factor of 1.8.
+
+       The field follows the CAR'S DISPLAY UNITS, which is also what the range
+       sensor does, so labelling it with the range sensor's unit and doing no
+       arithmetic is right in both metric and imperial installs. */
+    _speedFrom(raw) {
+      const v = Number(raw);
+      if (!isFinite(v) || v <= 0) return null;
+      return Math.round(v) + (this._imperial() ? " mph" : " km/h");
+    }
+    _imperial() {
+      return String(this._unit("range", "km")).toLowerCase().indexOf("mi") === 0;
+    }
     _steerEnt() { return this._st("steering_heat_sel") || this._st("steering_heat"); }
     _steeringOn() {
       const s = this._steerEnt();
@@ -737,8 +1283,15 @@
       const roots = ["/local/tesla-fleet-card/images/",
                      "https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/",
                      "/hacsfiles/tesla-fleet-homeassistant/images/"];
+      /* A generation-qualified pack wins if one exists, so dropping
+         images/models/y-juniper/red/app into the repo or into /local is all it
+         takes to fix a Juniper red Y. The unqualified path stays as the
+         fallback, which keeps the current right-colour-wrong-bodywork
+         behaviour for anyone without a matching pack. */
+      const gen = this._generation();
       const candidates = [];
       roots.forEach((root) => {
+        if (paint && gen) candidates.push(root + "models/" + dir + "-" + gen + "/" + paint + "/app");
         if (paint) candidates.push(root + "models/" + dir + "/" + paint + "/app", root + dir + "/" + paint);
         candidates.push(root + dir, root + "models/" + dir + "/app");
       });
@@ -850,6 +1403,9 @@
 
     _build() {
       this._built = true;
+      /* the driving overlay is filled in by _update, so its cached tier has
+         to be forgotten here or a rebuilt card keeps an empty overlay */
+      this._driveTier = null;
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
       const car = this._car;
       const multi = this._cars.length > 1;
@@ -945,7 +1501,10 @@
   .tapa { cursor:pointer; }
   /* mist animation is SMIL (in the SVG markup) - CSS transforms on filtered
      SVG elements don't animate on iOS WebKit (HA companion app) */
-  .climX { margin-top:8px; text-align:left; padding-left:14px; }
+  /* Centred, like Defrost Car directly above them. They were left-aligned
+     with a padding-left, which put four buttons in one column under two
+     different alignments. */
+  .climX { margin-top:8px; }
   .climX.on { color:#4fa3ff; }
   .copWrap { margin-top:14px; }
   .copLbl { font-size:12.5px; color:#9b9b9b; margin-bottom:7px; }
@@ -1459,6 +2018,8 @@
         return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1473,6 +2034,8 @@
       return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
@@ -1745,13 +2308,41 @@
       const presets = (cs && cs.attributes.preset_modes) || [];
       const has = (arr, v) => arr.some((o) => String(o).toLowerCase() === v);
       /* tesla_custom reports the SAME preset_modes and fan_modes list for every
-         car, so these lists are not capability detection. Buddy is offered
-         Bioweapon Defense and has no such thing. There is no reliable signal
-         to test, so a car can opt out by name: hide_climate: [bio, camp, pet]. */
+         car, so these lists are not capability detection. Checked again on
+         four of Nick's cars: all four report fan_modes ["off","bioweapon"],
+         including the Model 3s that plainly do not have it.
+
+         So Bioweapon falls back to the MODEL. It needs a HEPA filter, which
+         Model S, X and Y carry and Model 3 does not - Tesla could not fit the
+         larger filter in a Model 3. Verified against Tesla reference material
+         rather than recalled, and it matches what Nick found on Buddy, a
+         Model 3 Highland: the button was there and the feature was not.
+
+         A model string is a weaker signal than a capability flag, so both
+         directions are overridable: hide_climate: [bio] takes it away from a
+         car that reports one, show_climate: [bio] gives it to a Model 3 with
+         a retrofitted filter. */
       const hidden = (this._car.hide_climate || []).map((x) => String(x).toLowerCase());
-      const show = (k) => hidden.indexOf(k) < 0;
+      const shown = (this._car.show_climate || []).map((x) => String(x).toLowerCase());
+      const show = (k) => shown.indexOf(k) >= 0 || hidden.indexOf(k) < 0;
+      /* The model decides whether a HEPA filter was ever fitted, and the YEAR
+         decides whether this particular car got one: the Model Y line started
+         fitting them in June 2021, and Model S and X from 2016. Both are
+         retrofittable, which is what show_climate is for. The year is decoded
+         from the VIN the car reports, so an early Model Y now hides the button
+         by itself rather than needing hide_climate set by hand. With no VIN it
+         falls back to the model alone, which is the old behaviour. */
+      const model = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
+      const isY = model.indexOf("modely") >= 0 || model === "y";
+      const isSX = model.indexOf("models") >= 0 || model.indexOf("modelx") >= 0 ||
+                   model === "s" || model === "x";
+      const is3 = model.indexOf("model3") >= 0 || model === "3" || model.indexOf("m3") === 0;
+      const yr = this._year();
+      const hepa = shown.indexOf("bio") >= 0 || (!is3 &&
+        !(isY && yr && yr < 2022) &&
+        !(isSX && yr && yr < 2016));
       let html = "";
-      if (has(fans, "bioweapon") && show("bio"))
+      if (has(fans, "bioweapon") && show("bio") && hepa)
         html += `<button class="defrostBtn climX" id="btnBio">${climIcon(`<path d="${ICONS.shield}"/>`)}Bioweapon Defense Mode</button>`;
       if (has(presets, "camp") && show("camp"))
         html += `<button class="defrostBtn climX" id="btnCamp">${climIcon(CLIM_GLYPH.tent)}Camp Mode</button>`;
@@ -1793,7 +2384,8 @@
       const slug = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
       const path = "images/models/" + dir + "/" + (slug || "&lt;paint&gt;") + "/app/";
       const have = PACKS_SHIPPED.map((p) =>
-        `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}</li>`).join("");
+        `<li><b>${esc(p.model)}</b> &middot; ${esc(p.paint)}` +
+        (p.gen ? ` &middot; ${esc(GEN_LABEL[p.gen] || p.gen)}` : "") + `</li>`).join("");
       return `
 <div class="noPack">
   <svg class="noPackCar" viewBox="0 0 64 26" aria-hidden="true">
@@ -1868,6 +2460,7 @@
       else if (asleep) { status = "Asleep"; durKey = "asleep"; }
       else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
+      const moving = status === "Driving";
       const durS = this._st(durKey);
       const dur = durS ? relDur(durS.last_changed) : "";
       let subTxt = status + (dur && dur !== "just now" ? " " + dur : "");
@@ -1886,7 +2479,59 @@
       const pmode = String((climS0 && climS0.attributes.preset_mode) || "").toLowerCase();
       const MODE_LABEL = { dog: "Pet Mode", camp: "Camp Mode", keep: "Keep Climate On", defrost: "Defrosting" };
       if (MODE_LABEL[pmode]) subTxt = MODE_LABEL[pmode] + " \u00b7 " + subTxt;
+      /* Driving replaces "Parked 2h" with the speed, the way the app does.
+         Tesla reports drive_state.speed in mph regardless of the car's own
+         display units, so it is converted to match whatever unit the range
+         sensor is using. Speed was zero on every car available while this
+         was written, so the conversion is reasoned, not measured - the one
+         number on this screen I have not seen the car produce. */
+      const sp = this._speed();
+      if (moving && sp !== null) subTxt = sp;
       q("sub").textContent = subTxt;
+      /* Built here rather than in _build so the animation speed can follow
+         the car. SMIL will not pick up a changed dur on a running animation,
+         so the tier change is a re-render of this one element; it happens
+         only when the car crosses the threshold. Clearing it while parked
+         also stops six copies of the pack photo animating out of sight. */
+      const dOvl = q("driveOvl");
+      if (dOvl) {
+        /* "still" is a car in gear that is not moving - stopped at a junction.
+           It keeps its road and its wheels and loses the motion, because a
+           sliding road under a stationary car is the thing Nick spotted:
+           "At 0, the animation should stop." */
+        const dsrc = dOvl.getAttribute("data-src") || "";
+        const rd = this._road(dsrc);
+        const kph = this._speedKph();
+        const scale = Number(this._config && this._config.drive_speed) || 1;
+        /* a pack may carry its own reference cycle; drive_speed scales it */
+        const ref = (rd && rd.cycle > 0 ? rd.cycle : DRIVE.refCycle) /
+                    (scale > 0 ? scale : 1);
+        let cyc = 0;
+        if (moving && kph !== 0) {
+          const v = kph === null ? DRIVE.refKph : kph;   /* speed not reported */
+          cyc = ref * DRIVE.refKph / v;
+          cyc = Math.min(DRIVE.maxCycle, Math.max(DRIVE.minCycle, cyc));
+          cyc = Math.round(cyc * 100) / 100;
+        }
+        /* the tier key is the cycle itself, so the overlay is rebuilt when
+           the speed actually changes the animation and not otherwise */
+        const tier = !moving ? "off" : cyc > 0 ? "c" + cyc.toFixed(2) : "still";
+        if (tier !== this._driveTier) {
+          this._driveTier = tier;
+          if (tier === "off") dOvl.innerHTML = "";
+          else {
+            const dsfx = dOvl.getAttribute("data-sfx") || "Rest";
+            const box = this._carBox(dsrc, dsfx);
+            const cwv = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : 233 * 0.71;
+            const wh = this._wheels(dsrc);
+            const wdur = cyc > 0 ? wheelPeriod(wh, cwv, cyc, rd && rd.angle) : 0;
+            dOvl.innerHTML =
+              driveRoad(233, 108, box, rd, cyc > 0 ? +cyc.toFixed(3) : 0) +
+              driveWheels(wh, dsrc, wdur ? +wdur.toFixed(3) : 0);
+          }
+        }
+        dOvl.style.display = moving ? "" : "none";
+      }
 
       // on-car states
       const lockS = this._st("lock");
@@ -2005,15 +2650,15 @@
       const cVent = q("climVent");
       if (cVent) cVent.classList.toggle("on", this._is("windows_cover", "open"));
       const hideSeats = (this._car.hide_seats || []).map((x) => String(x).toLowerCase());
-      /* Auto is a MODE, not a level. The app writes the word under the glyph
-         rather than implying a level, so the card does the same. The waves are
-         still coloured, because the car may well be heating right now; the
-         label is what stops Auto reading as "someone set this to maximum". */
+      /* Auto is a MODE, not a level. Measured off a screen recording of the
+         app: on Auto the waves stay grey and the word "Auto" appears under
+         the glyph. Colour means "you set this yourself" - red for heat, blue
+         for cool - and the number of coloured waves is the level. */
       const paintHeat = (id, h) => {
         const g = q(id);
         if (!g) return;
         const col = h.mode === "cool" ? COOL_COL : HEAT_COL;
-        const lit = h.mode === "auto" ? 3 : h.level;
+        const lit = h.mode === "auto" ? 0 : h.level;
         g.classList.toggle("heatOn", h.mode !== "off");
         for (let i = 0; i < 3; i++) {
           const w = q(id + "_w" + i);
@@ -2022,7 +2667,7 @@
         const at = q(id + "_auto");
         if (at) {
           at.style.display = h.mode === "auto" ? "" : "none";
-          at.setAttribute("fill", col);
+          at.setAttribute("fill", IDLE_COL);
         }
       };
       [["seatFL","seat_fl"],["seatFR","seat_fr"],["seatRL","seat_rl"],["seatRR","seat_rr"]].forEach(([id, key]) => {
@@ -2048,7 +2693,7 @@
            steps the seats, so two waves here rather than three: a real car has
            two heat steps on the wheel, not three. */
         const wCol = wh.mode === "cool" ? COOL_COL : HEAT_COL;
-        const wLit = wh.mode === "auto" ? 2 : Math.min(wh.level, 2);
+        const wLit = wh.mode === "auto" ? 0 : Math.min(wh.level, 2);
         for (let i = 0; i < 2; i++) {
           const w = q("wheelHeat_w" + i);
           if (w) w.setAttribute("stroke", i < wLit ? wCol : IDLE_COL);
@@ -2056,11 +2701,12 @@
         const wAuto = q("wheelHeat_auto");
         if (wAuto) {
           wAuto.style.display = wh.mode === "auto" ? "" : "none";
-          wAuto.setAttribute("fill", wh.mode === "cool" ? COOL_COL : HEAT_COL);
+          wAuto.setAttribute("fill", IDLE_COL);
         }
         q("wheelHeat").classList.toggle("wheelOn", whOn);
         const wIc = q("wheelHeatIcon");
         if (wIc) wIc.querySelector("path").setAttribute("fill",
+          wh.mode === "auto" ? IDLE_COL :
           whOn ? (wh.mode === "cool" ? COOL_COL : HEAT_COL) : IDLE_COL);
       }
       const dfOn = this._defrostOn();
@@ -2158,8 +2804,32 @@
 
       // footer
       const odo = this._num("odometer");
-      q("odo").textContent = odo === null ? "" :
-        (this._car.model ? this._car.model + " · " : "") + Math.round(odo).toLocaleString() + " " + this._unit("odometer", "km");
+      /* "2024 Model 3 · 82,013 km". The year is decoded from the VIN, which
+         the car reports itself, so nothing needs configuring. The VIN itself
+         sits in the tooltip rather than on the face of the card: it identifies
+         a specific vehicle and people screenshot their dashboards. show_vin
+         puts it inline for anyone who wants it there. */
+      /* If the photos are the wrong generation, say so on the image itself
+         rather than letting the card quietly show the wrong car. A tooltip
+         because the fallback is deliberate and usually fine: the alternative
+         was a banner nagging about a difference most people will not mind. */
+      const gm = this._genMismatch();
+      const rImg = q("restImg");
+      if (rImg) {
+        if (gm) rImg.title = "These photos are the " + gm.got +
+          " car; this one looks like the " + gm.want + ". Colour is matched, bodywork is not.";
+        else rImg.title = "";
+      }
+      const yr = this._year();
+      const vin = this._vin();
+      const ident = (yr ? yr + " " : "") + (this._car.model || "");
+      const bits = [];
+      if (ident.trim()) bits.push(ident.trim());
+      if (odo !== null) bits.push(Math.round(odo).toLocaleString() + " " + this._unit("odometer", "km"));
+      if (vin && this._config.show_vin) bits.push(vin);
+      const odoEl = q("odo");
+      odoEl.textContent = bits.join(" \u00b7 ");
+      if (vin) odoEl.title = vin; else odoEl.removeAttribute("title");
       const lu = this._st("last_update");
       const rel = lu ? relDur(lu.state) : "";
       q("upd").textContent = rel ? (rel === "just now" ? "Updated just now" : "Updated " + rel + " ago") : "";

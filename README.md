@@ -86,7 +86,8 @@ cars:
 
 ## Images
 
-The card looks for images in this order - first hit wins:
+The card looks for images in this order - first hit wins. Generation is part
+of the match; see [Body generations](#body-generations) below.
 
 1. **Per-car options in YAML** - `image`, `image_side`, `image_charging`,
    `image_climate` and friends, each a `/local/...` path or full URL.
@@ -121,6 +122,39 @@ Make your own from your own Tesla app: screenshot the app's home screen
 biggest display you have, crop to the car, patch out the baked-in UI labels
 (the card draws live ones), save to the sizes above on `#141414`.
 
+### Body generations
+
+Tesla has refreshed both cars, and a refresh changes the bodywork enough that
+the photos do not transfer. So a pack has a generation as well as a model and
+a paint:
+
+| Pack | Car | Generation |
+| --- | --- | --- |
+| `models/y/red/app` | Model Y | pre-refresh |
+| `models/y/white/app` | Model Y | Juniper, the 2025 refresh |
+| `models/3/grey/app` | Model 3 | Highland, the 2024 refresh |
+
+The card works out which generation your car is from the model year, which it
+reads from the tenth character of the VIN. Model Y is unambiguous, because
+Tesla brands the 2025-built Juniper as a 2026 model: `T` or later is Juniper,
+`S` or earlier is pre-refresh. Model 3 is not, because Highland reached North
+America in January 2024, so 2024 and later is Highland, 2022 and earlier is
+not, and a 2023 could be either. The card does not guess at a 2023; set
+`generation: highland` or `generation: classic` on the car if you want to be
+sure.
+
+A pack at a generation-qualified path wins if one exists, so
+`models/y-juniper/red/app` in this repository or in your own
+`/config/www/tesla-fleet-card/images/` is all it takes to serve a Juniper red
+Model Y properly. **Contributions of the missing combinations are very
+welcome** - see below.
+
+If no pack matches your generation, the card falls back to one in your paint
+from the other generation: the colour is right and the bodywork is not. That
+is deliberate, because paint is the thing you configured and a wrong colour is
+the more jarring of the two mistakes, but the card is not quiet about it -
+hover the car photo and it tells you which generation you are looking at.
+
 **Controls not lining up on your images?** Set `calibrate: true` on the car,
 tap the image where each control sits, read the coordinates off the badge, and
 put them in `climate_anchors:` / `top_anchors:` (then remove `calibrate`).
@@ -144,10 +178,76 @@ Per car:
 | `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
 | `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
 | `hide_seats` | Seats your car physically lacks, e.g. `hide_seats: [rl, rr]`. Keys: `fl fr rl rr`. Unavailable seat entities hide automatically. |
-| `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. Tesla Custom reports the same preset and fan lists for every car, so the card cannot tell a Bioweapon Defense car from one without it. |
+| `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. |
+| `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
+| `generation` | Which body generation this car is, when the model year cannot say: `classic`, `highland` or `juniper`. Only needed for a 2023 Model 3, which could be either. |
 
 Card level: `default_car`, `show_tpms`, `tpms_min` (psi; auto-converted for
-bar), `accent`.
+bar), `accent`, `drive_speed`, `show_vin`.
+
+| Card option | What it does |
+| --- | --- |
+| `drive_speed` | Scales the driving animation. 1 is the default; 1.5 makes the road and wheels half again as fast. The animation is proportional to the car's actual speed, so this only changes the overall pace. |
+| `show_vin` | Prints the VIN in the footer beside the year and model. Off by default: it identifies a specific vehicle and dashboards get screenshotted, so it sits in the footer's tooltip instead unless you ask for it. |
+
+The footer shows the model year, which is decoded from the tenth character of
+the VIN. The card reads the VIN from the car's own entity attributes, so there
+is nothing to configure.
+
+### Bioweapon Defense Mode
+
+Tesla Custom reports the same `fan_modes` list for every car, so it cannot be
+used to tell a car that has Bioweapon Defense Mode from one that does not. The
+card falls back to the model instead: the mode needs a HEPA filter, which Model
+S, X and Y carry and Model 3 does not, so the button is hidden on a Model 3.
+
+The year matters too, and the card can see it. Model Y was built without the
+filter until Tesla added it to the production line in June 2021, and Model S
+and X only got it from 2016, so the card reads the model year from the VIN and
+hides the button on a car too old to have had one. The VIN comes from the car's
+own entity attributes; there is nothing to configure.
+
+Both are retrofittable and the card cannot know that, so a car with a
+retrofitted filter wants `show_climate: [bio]`. `hide_climate: [bio]` still
+removes the button from any car.
+
+## The driving view
+
+Put the car in gear and the resting photo gets a road: a lane marking sliding
+underneath, the wheels turning, and the car's speed where the "Parked 2h" timer
+usually sits.
+
+It is all measured off a screen recording of the Tesla app rather than
+invented. The markings run parallel to the car's own wheelbase, which is why
+each image pack carries the angle its photo was shot at. The wheels turn by
+rotating the photograph's own pixels, clipped to each hub and un-squashed to a
+circle first, so the spokes that move are the real ones. The rear wheel borrows
+the front's pixels, because it is the same wheel and is drawn too small to
+resample well on its own.
+
+The animation is proportional to the car's actual speed: double the speed and
+the road and wheels both double. `drive_speed` scales the overall pace if it
+feels wrong on your screen. At a standstill in gear the road and wheels stay
+drawn and stop moving, and the wheels render sharp, because the motion blur
+only exists to smear motion. `drive_motion: off` on a car turns the whole thing
+off.
+
+Wheel geometry was measured for the three bundled packs only. A pack we have
+not measured gets a road but still wheels, because a wrong ellipse wobbles and
+that looks worse than not moving. `wheels:` and `road:` let you supply your own.
+
+**Speed comes from the `device_tracker` entity's `speed` attribute**, in
+whatever units the car itself displays, so the card does no conversion and
+labels it from the range sensor. Tesla Custom reports it as `null` rather than
+`0` on a parked car.
+
+**The speed is only as fresh as your polling.** Tesla Custom polls every
+`scan_interval` seconds while a car is in Drive or Reverse, so at the default of
+60 the number on the card can be a minute old. Lowering `scan_interval`
+globally is a bad trade, because a parked car with sentry mode on then gets
+polled just as hard and that costs range. Better is an automation that calls
+`tesla_custom.polling_interval` with the driving car's VIN and a shorter
+interval, and restores it when the car parks.
 
 ## Updating
 
@@ -197,8 +297,10 @@ npm install
 npm test
 ```
 
-22 checks covering entity detection on both integrations, the per-car entity
-overrides, and the editor. It exits non-zero on failure.
+95 checks covering entity detection on both integrations, the per-car entity
+overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
+and year, and the driving view including the geometry that keeps the wheels
+rolling at the same speed as the road. It exits non-zero on failure.
 
 It is worth knowing why it exists. In v1.1.0 a reported bug ("the editor keeps
 reverting to the first vehicle") was diagnosed by reading the code, declared
@@ -209,7 +311,9 @@ changing detection or the editor, run it.
 
 ## Contributing an image pack
 
-A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`:
+A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`
+(or a generation-qualified folder such as `images/models/3-classic/grey/app/`;
+see [Body generations](#body-generations)):
 
 `topdown.jpg` · `topdown-plugged.jpg` · `topdown-charging.jpg` · `side.jpg` · `side-plugged.jpg` · `side-charging.jpg` · `climate.jpg`
 
