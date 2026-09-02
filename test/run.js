@@ -562,6 +562,40 @@ function customStates(p) {
     R.pack_local_not_judged = await render(
       Object.assign({ name: "L", prefix: "l_" }, M3), CLASSIC);
 
+    /* THE ONE THAT MATTERS, and the one v1.1.6 shipped broken. _probeImages
+       runs over EVERY car in the config, so every helper it calls must be
+       given the car it is judging. It called this._generation(), which reads
+       the SELECTED car, so five cars were judged by the sixth and the refusal
+       did nothing at all on any real multi-car card. A single-car fixture
+       cannot see this: this._car and the car being probed are the same object.
+       So this fixture has two cars, and asks about the one NOT selected. */
+    serveOnly("raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/models/3/grey/app/");
+    (() => {
+      const mk = () => {
+        const c = document.createElement("tesla-fleet-card");
+        document.body.appendChild(c);
+        c.setConfig({ type: "custom:tesla-fleet-card", cars: [
+          { name: "Newer", model: "Model 3", paint: "grey", prefix: "n_", generation: "highland" },
+          { name: "Older", model: "Model 3", paint: "grey", prefix: "p_", generation: "classic" }] });
+        const st = Object.assign(customStates("n_"), customStates("p_"));
+        c.hass = { states: st };
+        return [c, st];
+      };
+      window.__multi = mk;
+    })();
+    R.pack_multi_car = await (async () => {
+      const [c, st] = window.__multi();
+      await new Promise((z) => setTimeout(z, 150));
+      /* car 0 selected and Highland: it should have the pack */
+      const first = !!c.shadowRoot.getElementById("restImg");
+      /* switch to the pre-refresh car: its own generation must decide, not
+         the one that happened to be on screen while probing ran */
+      c._sel = 1; c._built = false; c.hass = { states: st };
+      await new Promise((z) => setTimeout(z, 150));
+      const second = !!c.shadowRoot.getElementById("restImg");
+      return [first, second];
+    })();
+
     window.fetch = realFetch;
     return R;
   }, customStates.toString()));
@@ -719,6 +753,9 @@ function customStates(p) {
   check("a pre-refresh car refuses it",        r.pack_classic_refuses, false);
   check("allow_other_generation opts back in", r.pack_classic_opt_in, true);
   check("a local pack is not judged",          r.pack_local_not_judged, true);
+  /* [selected Highland keeps its pack, the other car still refuses]. v1.1.6
+     returned [true, true]: every car was judged by whichever was on screen. */
+  check("each car is judged on its own generation", r.pack_multi_car, [true, false]);
 
   console.log("\nthe Generation field");
   check("a 2023 Model 3 is asked",         r.gen_field_ambiguous, ["", "highland", "classic"]);

@@ -1,6 +1,6 @@
 # Tesla Fleet Card
 
-<img src="docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
+<img src="https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
 
 **A Tesla-app-style card for your Home Assistant dashboard.** One card shows your
 whole fleet - battery, range, charging, climate, locks, location - looking and
@@ -169,6 +169,13 @@ A pack of your own under `/config/www/tesla-fleet-card/images/` is never
 refused, whatever folder you put it in. The card has no idea which generation
 your photos are of, so it does not presume to judge them.
 
+> **If you copied this repository's packs into your own `www` folder, name the
+> folder for the generation.** `/local` is checked first, so a copy sitting at
+> `models/3/grey/app` wins before the card ever reaches the one it would have
+> refused, and you get the wrong bodywork with no warning. Rename it to
+> `models/3-highland/grey/app` (or whichever it actually is) and it behaves.
+
+
 **Controls not lining up on your images?** Set `calibrate: true` on the car,
 tap the image where each control sits, read the coordinates off the badge, and
 put them in `climate_anchors:` / `top_anchors:` (then remove `calibrate`).
@@ -312,7 +319,7 @@ npm install
 npm test
 ```
 
-110 checks covering entity detection on both integrations, the per-car entity
+111 checks covering entity detection on both integrations, the per-car entity
 overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
 and year, and the driving view including the geometry that keeps the wheels
 rolling at the same speed as the road. It exits non-zero on failure.

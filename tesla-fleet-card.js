@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.6";
+  const CARD_VERSION = "1.1.7";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -1051,8 +1051,13 @@
        binary_sensor.<car>_online, so it costs nothing to read and needs no
        websocket call. Every entity is scanned rather than one hardcoded, so a
        different integration exposing it elsewhere still works. */
-    _vin() {
-      const car = this._car;
+    /* Every one of these takes an OPTIONAL car and defaults to the selected
+       one. That is not tidiness: _probeImages runs over EVERY car in the
+       config, so a helper that silently reads this._car judges five cars by
+       the sixth. That bug shipped in v1.1.6 and made the generation refusal do
+       nothing on a multi-car card, which is every real card. */
+    _vin(carArg) {
+      const car = carArg || this._car;
       if (car.vin) return String(car.vin).toUpperCase();
       if (car._vin !== undefined) return car._vin;
       car._vin = null;
@@ -1075,10 +1080,11 @@
        and later is Highland and 2022 and earlier is not, but a 2023 could be
        either and this returns null rather than guessing. A null simply means
        "no generation preference", which is the behaviour that existed before. */
-    _generation() {
-      const cfg = String(this._car.generation || this._car.gen || "").toLowerCase();
+    _generation(carArg) {
+      const car = carArg || this._car;
+      const cfg = String(car.generation || car.gen || "").toLowerCase();
       if (cfg) return cfg;
-      return genFromYear(this._car.model, this._year());
+      return genFromYear(car.model, this._year(car));
     }
     /* the generation of the pack actually on screen, where we know it */
     _packGen() {
@@ -1095,9 +1101,8 @@
       if (!want || !got || want === got) return null;
       return { want: GEN_LABEL[want] || want, got: GEN_LABEL[got] || got };
     }
-    _year() {
-      const v = this._vin();
-      return v ? (VIN_YEAR[v.charAt(9)] || null) : null;
+    _year(carArg) {
+      return yearFromVin(this._vin(carArg));
     }
     /* Which bundled pack is on screen. This used to look only at `images`
        and the auto-detected base, and so missed every car configured with
@@ -1321,7 +1326,7 @@
          takes to fix a Juniper red Y. The unqualified path stays as the
          fallback, which keeps the current right-colour-wrong-bodywork
          behaviour for anyone without a matching pack. */
-      const gen = this._generation();
+      const gen = this._generation(car);
       let candidates = [];
       roots.forEach((root) => {
         if (paint && gen) candidates.push(root + "models/" + dir + "-" + gen + "/" + paint + "/app");
