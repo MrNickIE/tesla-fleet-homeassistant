@@ -583,6 +583,35 @@ function customStates(p) {
       };
       window.__multi = mk;
     })();
+    /* A renamed pack folder must keep its measured geometry. The numbers were
+       measured from the PHOTOGRAPHS, so `models/3-highland/grey/app` and the
+       historical `models/3/grey/app` are the same photo set and must resolve
+       to the same wheels and the same road. Renaming a local pack folder to
+       say which generation it holds is exactly what silently stopped the
+       wheels turning after v1.1.7 shipped. */
+    const geomFor = (base) => {
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [
+        { name: "G", model: "Model 3", paint: "grey", prefix: "g_",
+          image_side: base + "/side.jpg", images: base }] });
+      const st = customStates("g_");
+      st["binary_sensor.g_online"] = { entity_id: "binary_sensor.g_online",
+        state: "on", attributes: {} };
+      st["sensor.g_shift_state"] = { entity_id: "sensor.g_shift_state", state: "D", attributes: {} };
+      st["device_tracker.g_location_tracker"] = { entity_id: "device_tracker.g_location_tracker",
+        state: "not_home", attributes: { latitude: 1, longitude: 2, speed: 40 } };
+      c.hass = { states: st };
+      const o = c.shadowRoot.getElementById("driveOvl");
+      return {
+        clips: o ? o.querySelectorAll("clipPath[id^=dwC] ellipse").length : 0,
+        spinners: o ? o.querySelectorAll("animateTransform").length : 0,
+        roadY: o && o.querySelector("line") ? o.querySelector("line").getAttribute("y1") : null
+      };
+    };
+    R.geom_canonical = geomFor("/local/x/images/models/3/grey/app");
+    R.geom_qualified = geomFor("/local/x/images/models/3-highland/grey/app");
+
     R.pack_multi_car = await (async () => {
       const [c, st] = window.__multi();
       await new Promise((z) => setTimeout(z, 150));
@@ -756,6 +785,11 @@ function customStates(p) {
   /* [selected Highland keeps its pack, the other car still refuses]. v1.1.6
      returned [true, true]: every car was judged by whichever was on screen. */
   check("each car is judged on its own generation", r.pack_multi_car, [true, false]);
+  /* the measurements follow the photographs, not the folder name */
+  check("a renamed pack keeps its wheels",
+    [r.geom_qualified.clips > 0, r.geom_qualified.spinners > 0], [true, true]);
+  check("a renamed pack has the same geometry",
+    r.geom_qualified, r.geom_canonical);
 
   console.log("\nthe Generation field");
   check("a 2023 Model 3 is asked",         r.gen_field_ambiguous, ["", "highland", "classic"]);

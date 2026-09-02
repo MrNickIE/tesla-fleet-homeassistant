@@ -319,7 +319,7 @@ npm install
 npm test
 ```
 
-111 checks covering entity detection on both integrations, the per-car entity
+113 checks covering entity detection on both integrations, the per-car entity
 overrides, the editor, the seat and wheel heat vocabularies, Bioweapon by model
 and year, and the driving view including the geometry that keeps the wheels
 rolling at the same speed as the road. It exits non-zero on failure.

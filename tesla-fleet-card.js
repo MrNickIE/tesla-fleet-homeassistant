@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.7";
+  const CARD_VERSION = "1.1.8";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -539,6 +539,31 @@
      generations were a thing. */
   const SHIPPED_GEN = {};
   PACKS_SHIPPED.forEach((p) => { if (p.dir && p.gen) SHIPPED_GEN[p.dir] = p.gen; });
+
+  /* The same photo set can sit at either spelling of its folder: the
+     historical `models/3/grey/app`, or the generation-qualified
+     `models/3-highland/grey/app` that this repo or a user may rename it to.
+     THE MEASURED GEOMETRY BELONGS TO THE PHOTOGRAPHS, NOT TO THE PATH, so
+     both spellings must resolve to the same numbers. Renaming a local pack
+     folder is exactly how this broke once: the wheels silently stopped
+     turning and the road marking moved, because the URL no longer contained
+     the key the measurements are filed under. */
+  const PACK_ALIAS = {};
+  PACKS_SHIPPED.forEach((p) => {
+    if (!p.dir || !p.gen) return;
+    const q = p.dir.replace(/^models\/([^/]+)\//, "models/$1-" + p.gen + "/");
+    if (q !== p.dir) PACK_ALIAS[q] = p.dir;
+  });
+  /* Whichever spelling appears in `hay`, give back the canonical folder. */
+  function shippedPackDir(hay) {
+    const h = String(hay || "");
+    for (let i = 0; i < PACKS_SHIPPED.length; i++) {
+      if (PACKS_SHIPPED[i].dir && h.indexOf(PACKS_SHIPPED[i].dir) >= 0) return PACKS_SHIPPED[i].dir;
+    }
+    const qs = Object.keys(PACK_ALIAS);
+    for (let i = 0; i < qs.length; i++) if (h.indexOf(qs[i]) >= 0) return PACK_ALIAS[qs[i]];
+    return null;
+  }
 
   /* Which body generation a model year implies, or null when the year honestly
      cannot say. There is one such case and it matters: a 2023 Model 3, because
@@ -1090,10 +1115,8 @@
     _packGen() {
       const dir = String(this._car.images || this._car._autoBase || "");
       if (!dir) return null;
-      for (let i = 0; i < PACKS_SHIPPED.length; i++) {
-        if (dir.indexOf(PACKS_SHIPPED[i].dir) >= 0) return PACKS_SHIPPED[i].gen || null;
-      }
-      return null;
+      const canon = shippedPackDir(dir);
+      return canon ? (SHIPPED_GEN[canon] || null) : null;
     }
     /* "your car is a Juniper but these are pre-refresh photos", or null */
     _genMismatch() {
@@ -1116,7 +1139,11 @@
     _packKey(src) {
       const hay = String(this._car.images || "") + " " +
                   String(this._car._autoBase || "") + " " + String(src || "");
-      return Object.keys(PACK_WHEELS).filter((k) => hay.indexOf(k) >= 0)[0] || null;
+      const direct = Object.keys(PACK_WHEELS).filter((k) => hay.indexOf(k) >= 0)[0];
+      if (direct) return direct;
+      /* a generation-qualified spelling of the same photo set */
+      const canon = shippedPackDir(hay);
+      return canon && PACK_WHEELS[canon] ? canon : null;
     }
     /* Wheel ellipses for the photo we are showing. Only the bundled packs
        were measured, and a wrong ellipse is a visible wobble, so somebody
