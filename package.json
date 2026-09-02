@@ -1,0 +1,11 @@
+{
+  "name": "tesla-fleet-card",
+  "private": true,
+  "description": "Dev tooling only. The card itself is a single file and has no dependencies.",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
+}

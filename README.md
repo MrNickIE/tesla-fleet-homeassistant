@@ -166,6 +166,28 @@ Designed by mimicking the official Tesla app. Built end-to-end by
 the screenshots, the screen recordings, the opinions, and the phrase
 "you have drawn a SPACESHIP". Shared under the MIT licence - enjoy.
 
+## Running the tests
+
+The card is one dependency-free file, so the only tooling here is the test
+suite. It drives the real card in a real browser, because the bugs worth
+catching in a custom card are the ones that only appear with genuine DOM
+behaviour.
+
+```
+npm install
+npm test
+```
+
+22 checks covering entity detection on both integrations, the per-car entity
+overrides, and the editor. It exits non-zero on failure.
+
+It is worth knowing why it exists. In v1.1.0 a reported bug ("the editor keeps
+reverting to the first vehicle") was diagnosed by reading the code, declared
+fixed, and shipped still broken, because the real fault was a shadow-root
+teardown that only shows up when a browser is actually running. Run against
+v1.1.1 this suite fails on exactly the five things v1.1.2 fixed. If you are
+changing detection or the editor, run it.
+
 ## Contributing an image pack
 
 A pack is seven photos from the Tesla app, in `images/models/<3|y>/<paint>/app/`:
