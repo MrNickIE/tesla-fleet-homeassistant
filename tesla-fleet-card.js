@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.9";
+  const CARD_VERSION = "1.1.10";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -116,7 +116,7 @@
     cop: "climate.{p}cabin_overheat_protection",
   };
 
-  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false, map_zoom: 15, location_tap: "map" };
+  const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false, map_zoom: 15, location_tap: "map", preview: false };
   const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {} };
 
   /* how long an assumed state is trusted before the real one wins back */
@@ -215,10 +215,61 @@
      marking, not two: two read as a hatch rather than a road. Absolute rather
      than relative to the runtime car box, because that box is a luma
      threshold that swallows the shadow by a different amount in each photo. */
+  /* ---- the two Model Y Juniper packs share one set of measurements ----
+     The white Juniper and the blue Juniper are the SAME Tesla app render in a
+     different colour, so once their side photos share a frame they share
+     their geometry too, and it is one set of numbers instead of two that
+     drift apart.
+
+     They did not share one until 2026-09-03. The white pack's three side
+     photos had been cropped independently: the car came out 506, 470 and 542
+     pixels wide across two different canvas heights, so no single cable path
+     or wheel ellipse could sit on all three, and the charging frame visibly
+     jumped in size when a car started charging. The three were re-framed onto
+     the blue pack's 660x400 canvas. The scale for each was solved by
+     cross-correlating edge gradients against the blue frame -- gradients
+     because they survive the change of paint colour, which plain pixels do
+     not -- and the three answers, 1.155, 1.225 and 1.060, agree to a
+     thousandth with the ratio of the independently measured car boxes. Two
+     methods that share no arithmetic landing on the same number is what makes
+     this worth trusting.
+
+     Nick's rule, and it is the right one: THE BASE IMAGES FOR THE SAME MODEL
+     MUST MATCH POSITION TO WORK. docs/pack-images.md writes it down.
+
+     One trap worth naming, because it looks like an error and is not: `angle`
+     below is -18.3 where every other pack reads about -21.8. The road really
+     is at the same angle in all of them. The Rest view is 233 x 108 with
+     preserveAspectRatio="none", so a 660x400 photo and a 660x330 photo squash
+     y by different amounts and the SAME physical line arrives at a different
+     angle in view units. An angle measured on one canvas cannot be copied to
+     another without re-deriving it. */
+  const Y_JUNIPER_SIDE = {
+    wheels: { lift: 0.85, front: [105.4, 86.8, 14.17, 11.14, 119.5],
+              rear: [202.1, 54.8, 0.84] },
+    road:   { angle: -18.3, lines: [[99.3, 2.2]] },
+    cable:  "M 55.1 104.5 C 55.7 104.4 57.7 104.1 59.0 103.9 C 60.3 103.6 61.6 103.3 62.9 103.1 " +
+      "C 64.2 102.8 65.5 102.6 66.8 102.3 C 68.1 102.1 69.4 101.8 70.7 101.6 " +
+      "C 72.0 101.3 73.3 101.0 74.6 100.8 C 75.9 100.6 77.2 100.4 78.5 100.2 " +
+      "C 79.8 100.0 81.2 99.8 82.5 99.6 C 83.8 99.4 85.1 99.2 86.4 99.0 " +
+      "C 87.8 98.9 89.1 98.7 90.4 98.5 C 91.7 98.3 93.0 98.1 94.4 98.0 " +
+      "C 95.7 97.8 97.0 97.6 98.3 97.4 C 99.6 97.1 100.9 96.9 102.2 96.7 " +
+      "C 103.6 96.5 104.9 96.4 106.2 96.1 C 107.5 95.9 108.8 95.5 110.0 95.2 " +
+      "C 111.3 94.8 112.5 94.4 113.7 93.9 C 114.9 93.5 116.0 92.9 117.0 92.2 " +
+      "C 118.0 91.6 119.0 90.8 119.7 90.0 C 120.5 89.1 121.0 88.2 121.4 87.2 " +
+      "C 121.8 86.2 121.9 85.2 122.2 84.2 C 122.5 83.2 122.9 82.2 123.2 81.2 " +
+      "C 123.5 80.2 123.8 79.2 124.1 78.2 C 124.4 77.2 124.6 76.2 124.9 75.2 " +
+      "C 125.1 74.2 125.4 73.2 125.6 72.2 C 125.9 71.2 125.9 70.1 126.3 69.1 " +
+      "C 126.6 68.1 127.2 67.2 127.7 66.2 C 128.1 65.3 128.5 64.3 129.0 63.4 " +
+      "C 129.6 62.4 130.0 61.4 130.7 60.5 C 131.4 59.7 132.2 58.9 133.1 58.1 " +
+      "C 134.0 57.3 135.4 56.3 135.9 55.9"
+  };
+
   const PACK_ROAD = {
-    "models/y/red/app":   { angle: -21.9, lines: [[93.3, 2.2]] },
-    "models/y/white/app": { angle: -21.8, lines: [[105.1, 2.2]] },
-    "models/3/grey/app":  { angle: -21.8, lines: [[97.6, 2.2]] }
+    "models/y/red/app":          { angle: -21.9, lines: [[93.3, 2.2]] },
+    "models/y/white/app":        Y_JUNIPER_SIDE.road,
+    "models/y-juniper/blue/app": Y_JUNIPER_SIDE.road,
+    "models/3/grey/app":         { angle: -21.8, lines: [[97.6, 2.2]] }
   };
   /* An unmeasured photo still gets a marking: the measured car box's bottom
      edge lands about 2 units below the tyre contact line on all three bundled
@@ -357,12 +408,12 @@
      case is what makes the other two answers worth believing. Eyeballing had
      by that point produced three different verdicts on the same wheel. */
   const PACK_WHEELS = {
-    "models/y/red/app":   { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
-                            rear: [185.2, 47.8, 0.85] },
-    "models/y/white/app": { lift: 1.11, front: [108.8, 91.7, 12.27, 8.19, 113.4],
-                            rear: [192.4, 59.0, 0.82] },
-    "models/3/grey/app":  { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
-                            rear: [187.8, 50.7, 0.86] }
+    "models/y/red/app":          { lift: 1.26, front: [106.9, 77.9, 15.65, 10.99, 109.3],
+                                   rear: [185.2, 47.8, 0.85] },
+    "models/y/white/app":        Y_JUNIPER_SIDE.wheels,
+    "models/y-juniper/blue/app": Y_JUNIPER_SIDE.wheels,
+    "models/3/grey/app":         { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
+                                   rear: [187.8, 50.7, 0.86] }
   };
 
   /* expand rear: [cx, cy, scale] into a full ellipse using the front's shape */
@@ -527,11 +578,50 @@
   const PACKS_SHIPPED = [
     { model: "Model Y", paint: "red", dir: "models/y/red/app", gen: "classic" },
     { model: "Model Y", paint: "white", dir: "models/y/white/app", gen: "juniper" },
+    { model: "Model Y", paint: "blue", dir: "models/y-juniper/blue/app", gen: "juniper" },
     { model: "Model 3", paint: "grey", dir: "models/3/grey/app", gen: "highland" }
   ];
   const GEN_LABEL = { classic: "pre-refresh", juniper: "Juniper (2025 refresh)",
                       highland: "Highland (2024 refresh)" };
   const PACK_DEFAULT = PACKS_SHIPPED[0];        // red Model Y
+
+  /* PREVIEW STATES. Every overlay the card can draw, on demand, so a state
+     can be looked at without waiting for a car to be in it. This exists
+     because the whole of 2026-09-02 was spent comparing overlays against the
+     Tesla app one real car at a time, and because the v1.1.4 demo switch was
+     deleted for being a hidden global that forced EVERY car to look like it
+     was driving. This is the opposite: opt-in per card, one car at a time,
+     and it patches only what the card READS. Commands are untouched, so a
+     preview can never send anything to a real car. */
+  const PREVIEWS = [
+    ["off",      "Live"],
+    ["parked",   "Parked"],
+    ["plugged",  "Plugged"],
+    ["charging", "Charging"],
+    ["slow",     "20 km/h"],
+    ["fast",     "100 km/h"],
+    ["defrost",  "Defrost"],
+    ["pet",      "Pet Mode"],
+    ["camp",     "Camp"],
+    ["offline",  "Offline"]
+  ];
+  const PREVIEW_PATCH = {
+    parked:   { shift: { state: "P" }, charger: { state: "off" },
+                charging: { state: "off" }, location: { attributes: { speed: null } } },
+    plugged:  { charger: { state: "on" }, charging: { state: "off" },
+                shift: { state: "P" }, location: { attributes: { speed: null } } },
+    charging: { charger: { state: "on" }, charging: { state: "on" },
+                charger_power: { state: "11" }, charging_rate: { state: "48" },
+                shift: { state: "P" }, location: { attributes: { speed: null } } },
+    slow:     { shift: { state: "D" }, charger: { state: "off" },
+                charging: { state: "off" }, location: { attributes: { speed: 20 } } },
+    fast:     { shift: { state: "D" }, charger: { state: "off" },
+                charging: { state: "off" }, location: { attributes: { speed: 100 } } },
+    defrost:  { climate: { state: "heat_cool", attributes: { preset_mode: "defrost" } } },
+    pet:      { climate: { state: "heat_cool", attributes: { preset_mode: "dog" } } },
+    camp:     { climate: { state: "heat_cool", attributes: { preset_mode: "camp" } } },
+    offline:  { online: { state: "off" } }
+  };
 
   /* The generation of every pack THIS REPO ships, keyed by its folder. This is
      what lets the card refuse to serve a car the wrong bodywork: the folder
@@ -551,9 +641,104 @@
   const PACK_ALIAS = {};
   PACKS_SHIPPED.forEach((p) => {
     if (!p.dir || !p.gen) return;
+    /* A pack whose folder ALREADY carries its generation - models/y-juniper -
+       needs no alias, and deriving one anyway produced models/y-juniper-juniper,
+       a folder nobody will ever have. */
+    if (new RegExp("^models/[^/]+-" + p.gen + "/").test(p.dir)) return;
     const q = p.dir.replace(/^models\/([^/]+)\//, "models/$1-" + p.gen + "/");
     if (q !== p.dir) PACK_ALIAS[q] = p.dir;
   });
+  /* A LEAN PACK ships 4 files and lets the card draw the cable.
+     Nick's idea, and the card already had the parts: it draws and animates
+     #cableP (blue plugged, green charging) for any car without a pack, and
+     port_xy / port_top_xy / cable_path already aim it. All that was missing
+     was a way for a PACK to say "draw it, do not expect it baked in".
+
+     A CONTRIBUTOR SUPPLIES FOUR screenshots: home resting, home plugged,
+     Controls, Climate. topdown-plugged and topdown-charging then come from the
+     overlay, and side-charging is generated at build time by hue-rotating the
+     baked cable. So five files ship, four are shot, and a genuinely-charging
+     screenshot is never needed.
+
+     THE OVERLAY IS FOR THE TOP-DOWN ONLY. The app swings to a rear
+     three-quarter only when a cable is ATTACHED, so no render exists of that
+     angle with the charge port flap open and no cable in it. The side view
+     therefore has nowhere to draw a cable into and keeps its baked one. The
+     top-down keeps one camera throughout, so there only the cable changes.
+
+     Anchors are in the card's own view units, per pack, because the port sits
+     somewhere different in every crop. A pack with no entry here keeps the
+     old baked-cable behaviour, so nothing that ships today changes. */
+  /* Where the cable lies in each pack's own side photograph, in overlay units.
+     v1.0.0 drew green dashes along the photographed cable while charging and
+     nothing else -- no second cable, no glow -- so the animation sat on top of
+     the image. v1.0.1 replaced that with an early return and it has been static
+     ever since; Nick noticed and was right. These are traced from the packs'
+     charging photos. Two traps, both hit: the cable is near-VERTICAL where it
+     leaves the port, so column sampling cuts the corner; and along the ground
+     it is a pale, almost colourless line, so a hue mask cannot see it at all --
+     that stretch is found with a white top-hat and joined at the knee, then the
+     whole thing is resampled along arc length so the corner keeps its shape.
+     The top end runs past the last lit pixel: the cable bends right into the
+     black connector body, so the search window tracks that drift instead of
+     assuming the run stays vertical, and the path ends at the connector.
+     Fitted with 14 knots and NO smoothing: smoothing the knots pulled the
+     curve off the cable by up to 6px at the bend. Unsmoothed it sits within
+     1.9px of the traced centreline. The last stretch into the connector was
+     still straight until the top was retraced as "not red" rather than by hue:
+     in shadow against red bodywork that is the only stable test, and it is what
+     revealed the inward curve. Last trap: the ground sweep and the vertical
+     run OVERLAP by a few px at the knee and were sampled on different axes,
+     so stitching them raw made the path go right, jump back left, then up --
+     a visible wiggle. Both are trimmed back from the corner and the spline
+     carries the turn. And the raw row-medians jitter about a pixel per row
+     where the cable crosses the dark WHEEL -- low contrast makes the mask edge
+     wobble -- which reads as a wiggle once sampled into knots, so each segment
+     is replaced by a cubic fit first. 18 knots, within 1.6px of the raw trace,
+     and x never reverses anywhere along it. */
+  /* Where each pack's charge port sits in its CLIMATE photo, in that overlay's
+     units. The card default was calibrated against one pack and is wrong for
+     every other, which put the bolt out in open air. Measured from the baked
+     cable where a pack has one, otherwise mapped across by fraction of the
+     car's body box -- these are all the same Tesla top-down render. */
+  const PACK_CLIM_PORT = {
+    "models/3/grey/app":       [61, 461],
+    "models/y/red/app":        [44, 501],
+    "models/y/white/app":      [56, 477],
+    "models/y-juniper/blue/app": [60, 499]
+  };
+
+  const PACK_CABLE_PATH = {
+    "models/3/grey/app":
+      "M 63.2 96.5 C 63.9 96.3 65.8 95.7 67.1 95.4 C 68.5 95.0 69.8 94.7 71.1 94.4 " +
+      "C 72.5 94.0 73.8 93.6 75.1 93.3 C 76.4 93.0 77.8 92.7 79.1 92.4 " +
+      "C 80.5 92.1 81.8 91.9 83.2 91.6 C 84.6 91.4 85.9 91.2 87.3 90.9 " +
+      "C 88.7 90.7 90.0 90.5 91.4 90.3 C 92.8 90.1 94.1 89.9 95.5 89.7 " +
+      "C 96.9 89.4 98.2 89.2 99.6 89.0 C 101.0 88.8 102.3 88.6 103.7 88.3 " +
+      "C 105.1 88.1 106.4 87.9 107.8 87.7 C 109.1 87.4 110.5 87.2 111.8 86.9 " +
+      "C 113.2 86.5 114.5 86.2 115.7 85.7 C 117.0 85.2 118.3 84.6 119.2 83.8 " +
+      "C 120.2 83.0 120.8 82.0 121.4 81.0 C 122.1 80.0 122.6 78.9 123.2 77.9 " +
+      "C 123.7 76.9 124.5 75.9 124.8 74.8 C 125.2 73.7 125.3 72.5 125.5 71.4 " +
+      "C 125.8 70.3 126.1 69.2 126.4 68.1 C 126.7 67.0 127.0 65.9 127.3 64.8 " +
+      "C 127.6 63.7 127.8 62.5 128.2 61.4 C 128.5 60.3 128.8 59.2 129.3 58.1 " +
+      "C 129.8 57.1 130.2 56.0 130.9 55.0 C 131.6 54.0 132.4 53.1 133.3 52.2 " +
+      "C 134.2 51.4 135.8 50.2 136.3 49.8",
+    "models/y/white/app":        Y_JUNIPER_SIDE.cable,
+    "models/y-juniper/blue/app": Y_JUNIPER_SIDE.cable,
+    "models/y/red/app":
+      "M 74.8 93.3 C 75.7 93.1 78.1 92.5 79.8 92.1 C 81.4 91.7 83.1 91.4 84.8 91.0 " +
+      "C 86.4 90.7 88.1 90.4 89.8 90.1 C 91.5 89.8 93.1 89.5 94.8 89.2 " +
+      "C 96.5 88.9 98.2 88.6 99.8 88.3 C 101.5 88.0 103.2 87.8 104.9 87.4 " +
+      "C 106.5 87.1 108.2 86.6 109.8 86.2 C 111.4 85.7 113.1 85.4 114.7 84.8 " +
+      "C 116.2 84.2 117.9 83.8 119.1 82.8 C 120.2 81.7 120.9 80.1 121.6 78.6 " +
+      "C 122.3 77.2 122.8 75.7 123.2 74.1 C 123.7 72.6 124.0 71.1 124.3 69.5 " +
+      "C 124.6 68.0 124.8 66.4 125.2 64.8 C 125.5 63.3 125.9 61.7 126.3 60.2 " +
+      "C 126.7 58.7 127.1 57.2 127.7 55.8 C 128.2 54.3 128.7 52.7 129.5 51.4 " +
+      "C 130.4 50.0 132.3 48.4 132.8 47.8"
+  };
+
+  const PACK_CABLE = {};
+
   /* Whichever spelling appears in `hay`, give back the canonical folder. */
   function shippedPackDir(hay) {
     const h = String(hay || "");
@@ -581,6 +766,24 @@
     }
     return null;
   }
+  /* Position 4 of a Tesla VIN is the model line. It is the one field the
+     config duplicates that the car itself can already answer, and a wrong
+     value there is quiet but expensive: it picks the image pack, and it feeds
+     genFromYear, so "Model Y" on a Model 3 asks for a Juniper decision about a
+     Highland car. Buddy sat mislabelled this way until his VIN was read.
+     S and X are here for completeness; no pack ships for them yet. */
+  const VIN_MODEL = { "3": "Model 3", Y: "Model Y", S: "Model S", X: "Model X" };
+  function modelFromVin(vin) {
+    const v = String(vin || "").toUpperCase();
+    return v.length === 17 ? (VIN_MODEL[v.charAt(3)] || null) : null;
+  }
+  /* Same normalisation genFromYear uses, so "modely", "Model Y" and "y" all
+     compare equal and a cosmetic difference is never reported as a conflict. */
+  function sameModel(a, b) {
+    const n = (m) => String(m || "").toLowerCase().replace(/\s+/g, "");
+    return !!a && !!b && n(a) === n(b);
+  }
+
   function yearFromVin(vin) {
     const v = String(vin || "").toUpperCase();
     return v.length === 17 ? (VIN_YEAR[v.charAt(9)] || null) : null;
@@ -1014,9 +1217,22 @@
       this._update();
     }
 
+    /* THE one place every reading goes through, so the preview patch applied
+       here reaches the whole card consistently: cable, glow, road, wheels,
+       status line, rows. Patching individual getters instead would leave the
+       overlays disagreeing with each other. */
     _st(key) {
       const id = this._car._entities[key];
-      return (id && this._hass && this._hass.states[id]) || null;
+      let s = (id && this._hass && this._hass.states[id]) || null;
+      const patch = this._preview && PREVIEW_PATCH[this._preview];
+      const p = patch && patch[key];
+      if (!p) return s;
+      const base = s || { entity_id: id || ("binary_sensor." + key), attributes: {} };
+      const out = { entity_id: base.entity_id, state: base.state,
+                    attributes: Object.assign({}, base.attributes || {}) };
+      if ("state" in p) out.state = p.state;
+      if (p.attributes) Object.assign(out.attributes, p.attributes);
+      return out;
     }
     _num(key) {
       const s = this._st(key);
@@ -1324,15 +1540,65 @@
         image_climate: "climate.jpg",
       };
       const f = FILES[kind];
+      /* A lean pack has no cable variants at all, so a request for one resolves
+         to the base render and the card draws the cable over it. Without this a
+         configured `images:` base would return a URL for a file that is not
+         there, which renders as a broken image rather than a car. */
+      /* ONLY the top-down. The side view cannot take a drawn cable: the app
+         swings to a rear three-quarter only when a cable is attached, so no
+         render exists of that angle with the charge port open and no cable.
+         Nick spotted it from the port flap: "the bit on the side of the car
+         that opens exists and doesnt exist". Falling back side-charging to
+         side-plugged would show the charging state with a baked BLUE cable. */
+      const LEAN_FALLBACK = { image_top_plugged: "image", image_top_charging: "image" };
+      if (this._packCable() && LEAN_FALLBACK[kind]) return this._img(LEAN_FALLBACK[kind]);
       // Auto-detected packs may be partial: only offer files that actually exist,
       // so missing slots fall back to the drawn artwork instead of a broken img.
       if (!car.images && car._packFiles && !car._packFiles[f]) return "";
       return base.replace(/\/$/, "") + "/" + f;
     }
+    /* The cable spec for the pack on screen, when it declares one. */
+    /* The dash path for a baked photo: the car's own override first, then the
+       pack it came from. No match means no trace exists for that photo, and
+       drawing a guessed curve over someone's car is worse than drawing none. */
+    _packClimPort() {
+      const car = this._car;
+      const hay = String(car.images || car._autoBase || car.image_climate || "");
+      const canon = hay ? shippedPackDir(hay) : null;
+      return (canon && PACK_CLIM_PORT[canon]) || null;
+    }
+    _bakedCablePath() {
+      const car = this._car;
+      if (car.cable_path) return car.cable_path;
+      const hay = String(car.images || car._autoBase || car.image_charging ||
+                         car.image_side_plugged || car.image_side || "");
+      const canon = hay ? shippedPackDir(hay) : null;
+      return (canon && PACK_CABLE_PATH[canon]) || null;
+    }
+    _packCable() {
+      const car = this._car;
+      /* _cableSet, not the value: CAR_DEFAULTS ships cable:"overlay" as the
+         DEFAULT, so testing the value alone matches every car and turns every
+         pack lean. Only an EXPLICIT config entry counts. */
+      if (car._cableSet && car.cable === "overlay") return car;
+      const hay = String(car.images || car._autoBase || "");
+      const canon = hay ? shippedPackDir(hay) : null;
+      return (canon && PACK_CABLE[canon]) || null;
+    }
     _cableBaked() {
       const car = this._car;
       if (car._cableSet) return car.cable === "baked";
+      /* a pack that declares the overlay is NOT baked, even though it is a pack */
+      if (this._packCable()) return false;
       return !!this._imgBase() || car.cable === "baked";  // pack images ship baked cables
+    }
+    /* Where the cable meets the car, in view units. Per-car config wins, then
+       the pack's own anchors, then the built-in defaults. */
+    _portXY(kind) {
+      const car = this._car;
+      if (car[kind]) return car[kind];
+      const pc = this._packCable();
+      return (pc && pc[kind]) || CAR_DEFAULTS[kind];
     }
     _probeImages(car) {
       if (car._probed) return;
@@ -1664,6 +1930,15 @@
   .ampRow button:active { color:#fff; }
 
   .ftr { display:flex; justify-content:space-between; margin-top:10px; font-size:11px; color:#6f6f6f; }
+  /* The preview strip is NOT hidden by climMode or mapMode: the whole
+     point is stepping through states while looking at any view. */
+  .pvw { display:flex; flex-wrap:wrap; gap:5px; margin-top:12px; padding-top:10px;
+         border-top:1px dashed #4a4a4a; }
+  .pvw button { background:#242424; border:1px solid #3a3a3a; color:#c9ccd1;
+         font-size:11px; padding:5px 9px; border-radius:7px; cursor:pointer; }
+  .pvw button:hover { background:#2f2f2f; }
+  .pvw button.on { background:#e82127; border-color:#e82127; color:#fff; font-weight:600; }
+  .pvwNote { font-size:10.5px; color:#6f6f6f; margin-top:7px; }
   .climMode .acts, .climMode .rows, .climMode .ftr { display:none; }
   .mapMode .acts, .mapMode .rows, .mapMode .ftr { display:none; }
   /* The map card is Home Assistant's own, so it brings its own ha-card
@@ -1733,6 +2008,11 @@
     <span id="odo">-</span>
     <span id="upd">-</span>
   </div>
+  ${(this._config && this._config.preview) ? `<div class="pvw" id="pvw">${
+      PREVIEWS.map(([k, label]) =>
+        `<button data-pv="${k}" class="${(this._preview || "off") === k ? "on" : ""}">${esc(label)}</button>`
+      ).join("")}</div>
+  <div class="pvwNote">Preview only: this fakes what the card READS, for ${esc(car.name || "this car")} on this dashboard. No commands are sent and the car is not touched. Remove <b>preview: true</b> to hide this.</div>` : ""}
 </ha-card>`;
 
       let carHtml = this._carSvg();
@@ -1750,6 +2030,14 @@
 
     _wire() {
       const q = (id) => this.shadowRoot.getElementById(id);
+      const pvw = q("pvw");
+      if (pvw) pvw.querySelectorAll("[data-pv]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const v = b.dataset.pv;
+          this._preview = (v === "off") ? null : v;
+          this._built = false;
+          if (this._hass) { this._build(); this._update(); }
+        }));
       q("btnRefresh").addEventListener("click", () => {
         this._call("button", "press", { entity_id: this._car._entities.refresh });
         q("btnRefresh").classList.add("spin");
@@ -2133,6 +2421,27 @@
       // no overlay at all. The drawn overlay exists only for users whose own
       // photos have no cable in them.
       if (baked) {
+        /* The photo already has the cable, so draw no cable -- only the green
+           dashes travelling along it while charging. Restores v1.0.0; v1.0.1
+           dropped the whole overlay and took the animation with it. */
+        const bakedPath = this._bakedCablePath();
+        /* Softer than the drawn-cable green and slightly narrower, with a blurred
+           edge: this rides on a photograph, so a hard bright line reads as a
+           sticker laid over the picture rather than current moving along it. */
+        const bakedDash = bakedPath ? `
+  <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
+       style="display:none;pointer-events:none">
+    <defs>
+      <filter id="cableSoft" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="0.55"/>
+      </filter>
+    </defs>
+    <path id="restCableDash" d="${bakedPath}" pathLength="100" stroke="#48865f" stroke-opacity=".58"
+          stroke-width="1.05" fill="none" stroke-linecap="round" stroke-dasharray="28 72"
+          filter="url(#cableSoft)">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.5s" repeatCount="indefinite"/>
+    </path>
+  </svg>` : "";
         return `
 <div class="imgWrap rest" id="restWrap" title="Open controls">
   <img id="restImg" class="carImg" src="${src}" alt="">
@@ -2141,11 +2450,11 @@
   <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
     <defs>${dfDefs(rSfx, this._car)}</defs>
     ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
-  </svg>
+  </svg>${bakedDash}
   <button class="ctlBtn" id="ctlOpen">Controls</button>
 </div>`;
       }
-      const pxy = this._car.port_xy || "159,47";
+      const pxy = this._portXY("port_xy");
       const [px, py] = pxy.split(",").map(Number);
       const cable = this._car.cable_path ||
         `M ${px - 43} 108 C ${px - 19} 103 ${px - 7} 76 ${px} ${py + 1}`;
@@ -2190,7 +2499,7 @@
                    (plg && this._img("image_top_plugged")) ||
                    this._img("image");
       const baked = this._cableBaked();
-      const [bx, by] = (this._car.port_top_xy || "40,692").split(",").map(Number);
+      const [bx, by] = String(this._portXY("port_top_xy")).split(",").map(Number);
       const boltArea = baked
         ? `<g id="boltPulse" style="display:none" transform="translate(${bx},${by})">
       <g>
@@ -2319,7 +2628,7 @@
       const photo = this._img("image_climate");
       const A = this._climAnchors();
       const cm = car.climate_anchors || {};
-      const [ppx, ppy] = anchor(cm, "port", [78, 478]);
+      const [ppx, ppy] = anchor(cm, "port", this._packClimPort() || [78, 478]);
       const vent = (x, rot, cls) => {
         const coneDur = cls === "vR" ? "3s" : "3.6s";
         const coneBeg = cls === "vR" ? "1.1s" : "0s";
@@ -2366,6 +2675,14 @@
       ${vent(A.fl[0], -3, "vL")}
       ${vent(A.fr[0], 3, "vR")}
     </g>
+    ${this._cableBaked() ? `
+    <g id="climBoltPulse" style="display:none" transform="translate(${ppx} ${ppy})">
+      <g>
+        <path d="M2 -13 L -7 3 h 5 l -3 12 l 11 -17 h -6 l 5 -11 z" fill="#2bd96f"/>
+        <animateTransform attributeName="transform" type="scale" values="1;1.28;1" dur="1.5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values=".85;1;.85" dur="1.5s" repeatCount="indefinite"/>
+      </g>
+    </g>` : `
     <g id="climCableG" style="display:none">
       <path id="climCable" d="M ${ppx - 78} ${ppy + 84} C ${ppx - 36} ${ppy + 80} ${ppx - 26} ${ppy + 46} ${ppx - 11} ${ppy + 17} C ${ppx - 7} ${ppy + 9} ${ppx - 3} ${ppy + 4} ${ppx} ${ppy}"
             stroke="#3f6db5" stroke-width="4" fill="none" stroke-linecap="round"/>
@@ -2383,7 +2700,7 @@
       <circle id="climGlow" cx="${ppx}" cy="${ppy}" r="4" fill="#d53a3a">
         <animate attributeName="opacity" values="1;.45;1" dur="1.5s" repeatCount="indefinite"/>
       </circle>
-    </g>
+    </g>`}
     ${heatWaves("seatFL", A.fl[0], A.fl[1])}
     ${heatWaves("seatFR", A.fr[0], A.fr[1])}
     ${heatWaves("seatRL", A.rl[0], A.rl[1])}
@@ -2767,7 +3084,10 @@
       const bakedC = this._cableBaked();
       const rOvl = q("restChgOvl");
       if (rOvl) {
-        rOvl.style.display = (!bakedC && (charging || plugged) && this._img("image_charging")) ? "" : "none";
+        /* baked: dashes only, and only while actually charging (plugged-but-idle
+           has nothing to animate). Unbaked keeps the drawn cable on both. */
+        rOvl.style.display = (bakedC ? charging
+                                     : (charging || plugged) && this._img("image_charging")) ? "" : "none";
         const rc = q("restCable");
         if (rc) rc.setAttribute("stroke", charging ? "#2f7a49" : "#3f6db5");
         const rd = q("restCableDash");
@@ -2927,6 +3247,12 @@
       const haze = q("climHaze");
       /* the app does not draw vent mist while defrost is running */
       if (haze) haze.style.display = climOn && !dfOn ? "" : "none";
+      /* A baked photo already shows its own cable, so the climate view does what
+         the Controls view does: a pulsing bolt at the port and nothing drawn.
+         Before this it drew a second cable, at a default anchor calibrated for
+         a different pack, floating clear of the car. */
+      const cbp = q("climBoltPulse");
+      if (cbp) cbp.style.display = charging ? "" : "none";
       const ccg = q("climCableG");
       if (ccg) {
         ccg.style.display = plugged ? "" : "none";
@@ -3074,6 +3400,37 @@
        rather than adding a third dropdown to five cars that do not need one.
        No VIN yet means no question either - the card is not stuck, it just has
        not been told the year, and `generation` in YAML still overrides. */
+    /* What the car says about itself, for the editor to show beside what the
+       config claims. Everything here is read-only: the point is that you can
+       see the card's own answer before deciding to override it. */
+    _detected(car) {
+      if (!this._hass || !car) return null;
+      const vin = vinForPrefix(this._hass, car.prefix);
+      if (!vin) return null;
+      const yr = yearFromVin(vin);
+      const md = modelFromVin(vin);
+      return { vin: vin, year: yr, model: md,
+               gen: genFromYear(md || car.model, yr),
+               conflict: !!(md && car.model && !sameModel(md, car.model)) };
+    }
+    /* One line of plain English per car. A disagreement is called out as a
+       disagreement, because a wrong model silently serves the wrong photos. */
+    _detectedHint(car) {
+      const d = this._detected(car);
+      if (!d) return "No VIN yet, so nothing to detect. The card reads the model, "
+                   + "year and generation off the VIN once the car reports one.";
+      const bits = [];
+      if (d.model) bits.push(esc(d.model));
+      if (d.year) bits.push(String(d.year));
+      if (d.gen) bits.push(esc(GEN_LABEL[d.gen] || d.gen));
+      const seen = bits.length ? bits.join(" &middot; ") : "nothing conclusive";
+      if (d.conflict)
+        return '<b>The VIN says ' + esc(d.model) + ', but this is set to '
+             + esc(car.model) + '.</b> Model picks the image pack and feeds the '
+             + 'generation, so a wrong one serves the wrong car. Detected: ' + seen + '.';
+      return "Detected from the VIN: " + seen
+           + (car.model ? ", which matches." : ". Leave Model as &quot;-&quot; to use it.");
+    }
     _ambiguous(car) {
       if (!this._hass || !car) return false;
       const yr = yearFromVin(vinForPrefix(this._hass, car.prefix));
@@ -3088,9 +3445,18 @@
       if (!car) return false;
       return !!(car.generation || car.gen) || this._ambiguous(car);
     }
+    /* The re-render guard. It has to cover everything the panel derives from
+       hass, not just the generation dropdown: a VIN arrives seconds after the
+       editor opens, and without the detected line in here the hint would sit
+       on "No VIN yet" for as long as the dialog stayed open. */
     _ambSig() {
       const cars = (this._config && this._config.cars) || [];
-      return cars.map((c) => (this._showGen(c) ? "1" : "0")).join("");
+      return cars.map((c) => {
+        const d = this._detected(c);
+        return (this._showGen(c) ? "1" : "0")
+             + (d ? ":" + (d.model || "") + "/" + (d.year || "") + "/" + (d.gen || "")
+                        + (d.conflict ? "!" : "") : ":-");
+      }).join("|");
     }
     _genOptions(car) {
       const m = String(car.model || "").toLowerCase().replace(/\s+/g, "");
@@ -3108,6 +3474,7 @@
           .rm { float:right; background:none; border:none; color:#c66; cursor:pointer; font-size:12px; }
           .add { margin-top:6px; cursor:pointer; }
           .hint { font-size:11.5px; color:var(--secondary-text-color,#999); margin-top:4px; }
+          .hint.warn { color:var(--error-color,#e05c5c); }
         </style><div>`;
       this._config.cars.forEach((c, i) => {
         html += `<div class="car" data-i="${i}">
@@ -3116,6 +3483,7 @@
           <label>Model <select data-i="${i}" data-k="model">
             ${["", "Model 3", "Model Y"].map((m) => `<option value="${m}" ${((c.model || "") === m) ? "selected" : ""}>${m || "-"}</option>`).join("")}
           </select></label>
+          <div class="hint ${this._detected(c) && this._detected(c).conflict ? 'warn' : ''}">${this._detectedHint(c)}</div>
           <label>Paint <select data-i="${i}" data-k="paint">
             ${["", "red", "grey", "silver", "white", "black", "blue"].map((p) => `<option value="${p}" ${((c.paint || "") === p) ? "selected" : ""}>${p || "-"}</option>`).join("")}
           </select></label>

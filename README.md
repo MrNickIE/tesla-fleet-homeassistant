@@ -114,15 +114,24 @@ A pack is seven JPEGs with these names and sizes:
 | `topdown.jpg` | 720 × 1284 | Top-down car, nose at top, ~2 % margin, background `#141414`. |
 | `topdown-plugged.jpg` | 720 × 1284 | Same, charge cable attached. |
 | `topdown-charging.jpg` | 720 × 1284 | Same, charging. |
-| `side.jpg` | 660 × 330 | Resting ¾ view, centred. |
-| `side-plugged.jpg` | 660 × 330 | Same, cable attached. |
-| `side-charging.jpg` | 660 × 375 | Same, charging, cable in shot. |
+| `side.jpg` | 660 × 400 | Resting ¾ view, centred. |
+| `side-plugged.jpg` | 660 × 400 | Same framing, cable attached. |
+| `side-charging.jpg` | 660 × 400 | Same framing, charging, cable in shot. |
 | `climate.jpg` | 720 × 1200 | Interior top-down: dash ~10 % down, front seats ~27 %, rear bench ~48 %. |
 
 Make your own from your own Tesla app: screenshot the app's home screen
 (parked, plugged, charging), Controls and Climate pages full-screen on the
 biggest display you have, crop to the car, patch out the baked-in UI labels
 (the card draws live ones), save to the sizes above on `#141414`.
+
+**The three side photos must show the car at the same size in the same place.**
+Everything the card draws over them - the cable's travelling dashes, the
+spinning wheels, the road marking - is measured once against the photographs, so
+a frame that disagrees with its siblings makes the car appear to change size the
+moment it starts charging and puts the overlays beside the thing they are meant
+to sit on. Crop the three together, and check by measurement rather than by eye:
+[docs/pack-images.md](docs/pack-images.md) has the rule, the check, and how to
+rescue photos that already disagree.
 
 ### Body generations
 
@@ -134,6 +143,7 @@ a paint:
 | --- | --- | --- |
 | `models/y/red/app` | Model Y | pre-refresh |
 | `models/y/white/app` | Model Y | Juniper, the 2025 refresh |
+| `models/y-juniper/blue/app` | Model Y | Juniper, the 2025 refresh |
 | `models/3/grey/app` | Model 3 | Highland, the 2024 refresh |
 
 The card works out which generation your car is from the model year, which it
@@ -256,9 +266,9 @@ drawn and stop moving, and the wheels render sharp, because the motion blur
 only exists to smear motion. `drive_motion: off` on a car turns the whole thing
 off.
 
-Wheel geometry was measured for the three bundled packs only. A pack we have
-not measured gets a road but still wheels, because a wrong ellipse wobbles and
-that looks worse than not moving. `wheels:` and `road:` let you supply your own.
+Wheel geometry was measured for the bundled packs only. A pack we have not
+measured gets a road but still wheels, because a wrong ellipse wobbles and that
+looks worse than not moving. `wheels:` and `road:` let you supply your own.
 
 **Speed comes from the `device_tracker` entity's `speed` attribute**, in
 whatever units the car itself displays, so the card does no conversion and
@@ -311,6 +321,12 @@ Designed by mimicking the official Tesla app. Built end-to-end by
 the screenshots, the screen recordings, the opinions, and the phrase
 "you have drawn a SPACESHIP". Shared under the MIT licence - enjoy.
 
+**Image packs.** The pre-refresh Model Y and the Highland Model 3 come from
+MrNickIE's own cars. The Juniper Model Y in white came from
+[@panka403](https://github.com/panka403) in PR #2. The Juniper Model Y in blue
+was contributed by one of MrNickIE's neighbours, from photographs of their own
+car and shared with their permission.
+
 ## Seat, wheel and climate display
 
 Tesla stores a **mode and a level**, not a single number: Auto, or Heat or
@@ -360,6 +376,11 @@ A pack is seven photos from the Tesla app:
 `topdown.jpg` · `topdown-plugged.jpg` · `topdown-charging.jpg` · `side.jpg` · `side-plugged.jpg` · `side-charging.jpg` · `climate.jpg`
 
 Partial packs are fine - the card probes each slot and uses what it finds.
+
+Read [docs/pack-images.md](docs/pack-images.md) before you crop anything. The
+one rule that matters is that a pack's three side photos share a canvas and put
+the car in the same place on it; a pack that gets that wrong looks fine as three
+pictures and wrong as a card.
 
 ### Which folder
 
