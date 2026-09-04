@@ -579,7 +579,8 @@
     { model: "Model Y", paint: "red", dir: "models/y/red/app", gen: "classic" },
     { model: "Model Y", paint: "white", dir: "models/y/white/app", gen: "juniper" },
     { model: "Model Y", paint: "blue", dir: "models/y-juniper/blue/app", gen: "juniper" },
-    { model: "Model 3", paint: "grey", dir: "models/3/grey/app", gen: "highland" }
+    { model: "Model 3", paint: "grey", dir: "models/3/grey/app", gen: "highland" },
+    { model: "Model 3", paint: "white", dir: "models/3/white/app", gen: "classic" }
   ];
   const GEN_LABEL = { classic: "pre-refresh", juniper: "Juniper (2025 refresh)",
                       highland: "Highland (2024 refresh)" };
