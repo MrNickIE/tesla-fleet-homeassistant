@@ -117,6 +117,11 @@ A pack is seven JPEGs with these names and sizes:
 | `side.jpg` | 660 × 400 | Resting ¾ view, centred. |
 | `side-plugged.jpg` | 660 × 400 | Same framing, cable attached. |
 | `side-charging.jpg` | 660 × 400 | Same framing, charging, cable in shot. |
+
+Those side sizes are for a **new** pack. Two of the four bundled packs are
+660 × 330 instead, which is fine: the measurements are per pack, so what matters
+is that a pack's own three side photos agree with each other, not which canvas
+it uses.
 | `climate.jpg` | 720 × 1200 | Interior top-down: dash ~10 % down, front seats ~27 %, rear bench ~48 %. |
 
 Make your own from your own Tesla app: screenshot the app's home screen

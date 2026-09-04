@@ -18,6 +18,13 @@ const { chromium } = require("playwright");
 
 const CARD = path.join(__dirname, "..", "tesla-fleet-card.js");
 
+/* Every pack the card says it ships, read out of PACKS_SHIPPED in the source
+   rather than retyped here, so a pack added later is covered by the
+   completeness checks without anybody remembering to update this file. */
+const SHIPPED_DIRS = (fs.readFileSync(CARD, "utf8")
+  .match(/dir:\s*"(models\/[^"]+)"/g) || [])
+  .map((m) => m.replace(/.*"(models\/[^"]+)".*/, "$1"));
+
 let passed = 0;
 const failures = [];
 function check(name, actual, expected) {
@@ -742,7 +749,7 @@ function customStates(p) {
                image_charging: "/local/x/models/3/grey/app/side-charging.jpg",
                image_side_plugged: "/local/x/models/3/grey/app/side-plugged.jpg",
                image_side: "/local/x/models/3/grey/app/side.jpg" }, states(true, true));
-      R.m3_path_is_own = dash(c) ? dash(c).getAttribute("d").indexOf("M 63.2 96.5") === 0 : false;
+      R.m3_path_is_own = dash(c) ? dash(c).getAttribute("d").indexOf("M 63.2 105.1") === 0 : false;
       R.m3_path_not_ymodel = dash(c) ? dash(c).getAttribute("d").indexOf("M 74.8") !== 0 : false;
       c.remove();
     })();
@@ -874,6 +881,7 @@ function customStates(p) {
      one pack folder and 404 for everything else. That is exactly the situation
      on GitHub raw today: models/3/grey/app exists and is the Highland pack,
      and no models/3-classic/grey/app exists yet. */
+  await page.evaluate((d) => { window.__SD = d; }, SHIPPED_DIRS);
   Object.assign(r, await page.evaluate(async (customStatesSrc) => {
     const customStates = eval("(" + customStatesSrc + ")");
     const R = {};
@@ -935,6 +943,7 @@ function customStates(p) {
       };
       window.__multi = mk;
     })();
+    window.__shippedDirs = window.__SD;
     /* A renamed pack folder must keep its measured geometry. The numbers were
        measured from the PHOTOGRAPHS, so `models/3-highland/grey/app` and the
        historical `models/3/grey/app` are the same photo set and must resolve
@@ -1008,6 +1017,67 @@ function customStates(p) {
        to ROAD_DEFAULT would put its marking at the clamp, y = 105 */
     R.jun_road_measured = R.jun_blue_geom.roadY !== null
                           && Math.abs(parseFloat(R.jun_blue_geom.roadY) - 105) > 1;
+
+    /* ---- EVERY shipped pack gets all three overlays --------------------
+       The blue Juniper pack shipped with a cable and wheels but no measured
+       road, so it fell through to the default, which is derived from the car
+       box and clamped to the bottom of the frame. On its taller canvas that
+       clamp landed off the edge and the driving view had no road marking at
+       all, through an approval and a release, because every existing test
+       asked about one pack at a time and this one was about a pack MISSING
+       from a table.
+
+       So this walks the shipped list itself. A pack added later with an
+       incomplete set of measurements fails here rather than looking fine
+       until somebody puts that car in drive. */
+    const packGeom = (dir) => {
+      const c = document.createElement("tesla-fleet-card");
+      document.body.appendChild(c);
+      c.setConfig({ type: "custom:tesla-fleet-card", cars: [{
+        name: "S", model: "Model Y", paint: "white", prefix: "s_", cable: "baked",
+        images: "/local/x/images/" + dir,
+        image_side:         "/local/x/images/" + dir + "/side.jpg",
+        image_side_plugged: "/local/x/images/" + dir + "/side-plugged.jpg",
+        image_charging:     "/local/x/images/" + dir + "/side-charging.jpg" }] });
+      const st = {
+        "binary_sensor.s_online":   { entity_id: "binary_sensor.s_online",   state: "on",  attributes: {} },
+        "binary_sensor.s_charger":  { entity_id: "binary_sensor.s_charger",  state: "on",  attributes: {} },
+        "binary_sensor.s_charging": { entity_id: "binary_sensor.s_charging", state: "on",  attributes: {} }
+      };
+      c.hass = { states: st };
+      const dash = c.shadowRoot.getElementById("restCableDash");
+      const cable = dash ? dash.getAttribute("d") : null;
+      /* now the same car in drive, for the wheels and the road */
+      c.remove();
+      const d = document.createElement("tesla-fleet-card");
+      document.body.appendChild(d);
+      d.setConfig({ type: "custom:tesla-fleet-card", cars: [{
+        name: "S", model: "Model Y", paint: "white", prefix: "s_",
+        images: "/local/x/images/" + dir,
+        image_side: "/local/x/images/" + dir + "/side.jpg" }] });
+      d.hass = { states: {
+        "binary_sensor.s_online": { entity_id: "binary_sensor.s_online", state: "on", attributes: {} },
+        "sensor.s_shift_state":   { entity_id: "sensor.s_shift_state", state: "D", attributes: {} },
+        "device_tracker.s_location_tracker": { entity_id: "device_tracker.s_location_tracker",
+          state: "not_home", attributes: { latitude: 1, longitude: 2, speed: 40 } } } };
+      const o = d.shadowRoot.getElementById("driveOvl");
+      const line = o ? o.querySelector("line") : null;
+      const y1 = line ? parseFloat(line.getAttribute("y1")) : null;
+      const y2 = line ? parseFloat(line.getAttribute("y2")) : null;
+      const clips = o ? o.querySelectorAll("clipPath[id^=dwC] ellipse").length : 0;
+      d.remove();
+      return { cable: !!cable, clips, roadMid: (y1 !== null && y2 !== null) ? (y1 + y2) / 2 : null };
+    };
+    R.shipped_dirs = window.__shippedDirs || null;
+    R.shipped_geom = (window.__shippedDirs || []).map((dir) => {
+      const g = packGeom(dir);
+      return { dir,
+               cable: g.cable,
+               wheels: g.clips > 0,
+               /* a marking the viewer can actually see: inside the 108-unit
+                  view with room for its own stroke, not pinned to the clamp */
+               road: g.roadMid !== null && g.roadMid > 60 && g.roadMid < 106 };
+    });
 
     R.pack_multi_car = await (async () => {
       const [c, st] = window.__multi();
@@ -1352,6 +1422,13 @@ function customStates(p) {
   check("both Junipers use one road",         r.jun_blue_geom.roadY, r.jun_white_geom.roadY);
   check("the Juniper road is measured",       r.jun_road_measured, true);
   check("no models/y-juniper-juniper alias",  r.jun_no_double_alias, true);
+
+  console.log("\nevery shipped pack has all three overlays");
+  check("the shipped list was found", (r.shipped_dirs || []).length >= 4, true);
+  (r.shipped_geom || []).forEach((g) => {
+    check(g.dir + ": cable, wheels and a visible road",
+      [g.cable, g.wheels, g.road], [true, true, true]);
+  });
 
   console.log("\nthe Generation field");
   check("a 2023 Model 3 is asked",         r.gen_field_ambiguous, ["", "highland", "classic"]);

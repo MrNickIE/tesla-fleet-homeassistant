@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.10";
+  const CARD_VERSION = "1.1.11";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -265,11 +265,35 @@
       "C 134.0 57.3 135.4 56.3 135.9 55.9"
   };
 
+  /* The Highland Model 3 pack was re-framed on the same day and the same rule,
+     but by a different route, and the difference is instructive.
+
+     Its plugged and charging photos turned out to be the SAME app render at the
+     same scale, differing only in canvas height, 330 against 375: edge-gradient
+     correlation put them at scale 1.000, offset (0, -14), ncc 0.96. So charging
+     became plugged's frame by a pure crop, 14 rows up, with no resampling at
+     all. Only the parked photo needed rescaling, by 1.040.
+
+     That scale could NOT come from correlation, because parked is a front
+     three-quarter render and the other two are rear three-quarter: the peak sat
+     at ncc 0.16, which is the tell that a correlation answer is worthless. It
+     came instead from two invariants that do survive a change of pose,
+     silhouette width (487/468 = 1.041) and silhouette height (293/282 = 1.039),
+     which agree. The check that it was right: at that scale, with the bottom
+     edge aligned, all four edges of the car's box land on the plugged frame's,
+     which nothing in the fit was asking for.
+
+     AND THE ROAD ANGLE HERE DID NOT CHANGE, where the Juniper's did. That is
+     not an inconsistency. The Juniper's canvas went from 330 to 400, so the
+     view's y squash changed and the angle had to be re-derived; the Highland
+     stayed on 330 and the transform is a uniform scale, so the angle in view
+     units is untouched and only the line's height moves. The rule is that the
+     angle follows the CANVAS, not the crop. */
   const PACK_ROAD = {
     "models/y/red/app":          { angle: -21.9, lines: [[93.3, 2.2]] },
     "models/y/white/app":        Y_JUNIPER_SIDE.road,
     "models/y-juniper/blue/app": Y_JUNIPER_SIDE.road,
-    "models/3/grey/app":         { angle: -21.8, lines: [[97.6, 2.2]] }
+    "models/3/grey/app":         { angle: -21.8, lines: [[103.1, 2.3]] }
   };
   /* An unmeasured photo still gets a marking: the measured car box's bottom
      edge lands about 2 units below the tyre contact line on all three bundled
@@ -412,8 +436,8 @@
                                    rear: [185.2, 47.8, 0.85] },
     "models/y/white/app":        Y_JUNIPER_SIDE.wheels,
     "models/y-juniper/blue/app": Y_JUNIPER_SIDE.wheels,
-    "models/3/grey/app":         { lift: 1.06, front: [107.0, 81.4, 15.19, 10.33, 95.7],
-                                   rear: [187.8, 50.7, 0.86] }
+    "models/3/grey/app":         { lift: 1.06, front: [107.4, 86.3, 15.80, 10.74, 95.7],
+                                   rear: [191.4, 54.4, 0.86] }
   };
 
   /* expand rear: [cx, cy, scale] into a full ellipse using the front's shape */
@@ -710,19 +734,19 @@
 
   const PACK_CABLE_PATH = {
     "models/3/grey/app":
-      "M 63.2 96.5 C 63.9 96.3 65.8 95.7 67.1 95.4 C 68.5 95.0 69.8 94.7 71.1 94.4 " +
-      "C 72.5 94.0 73.8 93.6 75.1 93.3 C 76.4 93.0 77.8 92.7 79.1 92.4 " +
-      "C 80.5 92.1 81.8 91.9 83.2 91.6 C 84.6 91.4 85.9 91.2 87.3 90.9 " +
-      "C 88.7 90.7 90.0 90.5 91.4 90.3 C 92.8 90.1 94.1 89.9 95.5 89.7 " +
-      "C 96.9 89.4 98.2 89.2 99.6 89.0 C 101.0 88.8 102.3 88.6 103.7 88.3 " +
-      "C 105.1 88.1 106.4 87.9 107.8 87.7 C 109.1 87.4 110.5 87.2 111.8 86.9 " +
-      "C 113.2 86.5 114.5 86.2 115.7 85.7 C 117.0 85.2 118.3 84.6 119.2 83.8 " +
-      "C 120.2 83.0 120.8 82.0 121.4 81.0 C 122.1 80.0 122.6 78.9 123.2 77.9 " +
-      "C 123.7 76.9 124.5 75.9 124.8 74.8 C 125.2 73.7 125.3 72.5 125.5 71.4 " +
-      "C 125.8 70.3 126.1 69.2 126.4 68.1 C 126.7 67.0 127.0 65.9 127.3 64.8 " +
-      "C 127.6 63.7 127.8 62.5 128.2 61.4 C 128.5 60.3 128.8 59.2 129.3 58.1 " +
-      "C 129.8 57.1 130.2 56.0 130.9 55.0 C 131.6 54.0 132.4 53.1 133.3 52.2 " +
-      "C 134.2 51.4 135.8 50.2 136.3 49.8",
+      "M 63.2 105.1 C 63.9 104.9 65.8 104.2 67.1 103.8 C 68.5 103.4 69.8 103.0 71.1 102.7 " +
+      "C 72.5 102.2 73.8 101.8 75.1 101.4 C 76.4 101.1 77.8 100.7 79.1 100.4 " +
+      "C 80.5 100.1 81.8 99.8 83.2 99.5 C 84.6 99.2 85.9 99.0 87.3 98.7 " +
+      "C 88.7 98.5 90.0 98.2 91.4 98.0 C 92.8 97.8 94.1 97.5 95.5 97.3 " +
+      "C 96.9 97.0 98.2 96.8 99.6 96.5 C 101.0 96.3 102.3 96.1 103.7 95.8 " +
+      "C 105.1 95.5 106.4 95.3 107.8 95.1 C 109.1 94.8 110.5 94.5 111.8 94.2 " +
+      "C 113.2 93.8 114.5 93.4 115.7 92.8 C 117.0 92.3 118.3 91.6 119.2 90.6 " +
+      "C 120.2 89.7 120.8 88.6 121.4 87.4 C 122.1 86.3 122.6 85.1 123.2 83.9 " +
+      "C 123.7 82.8 124.5 81.7 124.8 80.4 C 125.2 79.2 125.3 77.8 125.5 76.5 " +
+      "C 125.8 75.3 126.1 74.0 126.4 72.8 C 126.7 71.5 127.0 70.3 127.3 69.0 " +
+      "C 127.6 67.8 127.8 66.4 128.2 65.2 C 128.5 63.9 128.8 62.7 129.3 61.4 " +
+      "C 129.8 60.3 130.2 59.0 130.9 57.9 C 131.6 56.8 132.4 55.7 133.3 54.7 " +
+      "C 134.2 53.8 135.8 52.5 136.3 52.0",
     "models/y/white/app":        Y_JUNIPER_SIDE.cable,
     "models/y-juniper/blue/app": Y_JUNIPER_SIDE.cable,
     "models/y/red/app":
