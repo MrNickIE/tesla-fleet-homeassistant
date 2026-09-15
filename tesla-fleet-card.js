@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.11";
+  const CARD_VERSION = "1.1.12";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -289,6 +289,42 @@
      stayed on 330 and the transform is a uniform scale, so the angle in view
      units is untouched and only the line's height moves. The rule is that the
      angle follows the CANVAS, not the crop. */
+  /* ---- which car is selected has to outlive the element ----------------
+     Issue #1, reported three times, fixed twice at the wrong layer.
+
+     HA 2026.9's card editor DESTROYS AND REBUILDS the preview element on every
+     config change. Verified on a real dashboard rather than reasoned about:
+     tag the element, click the second car, change one Paint dropdown, and the
+     element in the dialog is a DIFFERENT OBJECT with _sel back at 0 and the
+     first car on screen. Editing the YAML directly does it too, which is what
+     ruled out the dropdown handling.
+
+     So v1.1.0 and v1.1.2 both kept the selection across setConfig, and both
+     were right about the code and wrong about the problem: by the time it
+     would have mattered there was no instance left to keep it on. The lesson
+     is the one this project keeps relearning. A synthetic harness reusing one
+     element could never reproduce this, and did not, twice.
+
+     Module scope is loaded once per page, so it survives the rebuild. Keyed on
+     the cars so two cards on one dashboard keep their own selection, and keyed
+     on PREFIX rather than name so that editing a name does not lose your
+     place. Position stands in for a car with no prefix. Editing a prefix does
+     reset it, which is one keystroke's worth of annoyance in the rarest edit.
+
+     This is a page-lifetime memory, not a stored setting: a fresh load starts
+     from default_car again, which is what that option is for. */
+  const LAST_SEL = new Map();
+  const SEL_MEMORY_MAX = 8;
+  function selKey(cars) {
+    return (cars || []).map((c, i) => String((c && c.prefix) || ("#" + i))).join("|");
+  }
+  function rememberSel(key, i) {
+    if (!key) return;
+    LAST_SEL.delete(key);                       // re-insert so it is newest
+    LAST_SEL.set(key, i);
+    while (LAST_SEL.size > SEL_MEMORY_MAX) LAST_SEL.delete(LAST_SEL.keys().next().value);
+  }
+
   const PACK_ROAD = {
     "models/y/red/app":          { angle: -21.9, lines: [[93.3, 2.2]] },
     "models/y/white/app":        Y_JUNIPER_SIDE.road,
@@ -1173,11 +1209,17 @@
         car._detected = !!forced;
         return car;
       });
-      /* Keep the chosen car across setConfig. The editor emits config-changed on
-         every keystroke, so HA re-ran setConfig and the preview snapped back to
-         the first car each time (issue #1). */
+      /* Keep the chosen car across setConfig. Three sources, in order: this
+         instance (a dashboard card that is merely being re-fed its config),
+         then the module-scope memory (a preview element HA has just rebuilt
+         under us), then default_car for a genuinely first render. */
+      this._selKey = selKey(this._config.cars);
       const keep = typeof this._sel === "number" && this._sel < this._cars.length;
-      this._sel = keep ? this._sel : Math.min(this._config.default_car || 0, this._cars.length - 1);
+      const remembered = LAST_SEL.get(this._selKey);
+      this._sel = keep ? this._sel
+                : (typeof remembered === "number" && remembered < this._cars.length)
+                  ? remembered
+                  : Math.min(this._config.default_car || 0, this._cars.length - 1);
       this._built = false;
       this._arm = {};
       this._armT = {};
@@ -1234,6 +1276,7 @@
     _selectCar(i) {
       if (i === this._sel) return;
       this._sel = i;
+      rememberSel(this._selKey, i);
       this._view = "";
       this._built = false;
       this._arm = {};

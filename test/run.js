@@ -1011,6 +1011,85 @@ function customStates(p) {
        generation-qualified alias from it produced models/y-juniper-juniper,
        a folder that exists nowhere. No alias should be minted for it. */
     R.jun_no_double_alias = junDash("models/y-juniper-juniper/blue/app") === null;
+    /* ---- the selected car survives HA REBUILDING the element -----------
+       Issue #1. HA 2026.9's card editor does not re-feed the preview element a
+       new config, it throws the element away and builds a new one. Proved on a
+       real dashboard: tag the element, click the second car, change one Paint
+       dropdown, and what is in the dialog afterwards is a different object
+       with _sel at 0.
+
+       That is why the two earlier fixes missed, and why every earlier test
+       missed too: they all reused one element, where the card was always
+       correct. So this fixture throws the element away exactly as HA does.
+       Against v1.1.11 the second card comes up on car 0 and this fails. */
+    (() => {
+      const cars = (paint2) => [
+        { name: "Grande Bianco", model: "Model Y", paint: "white", prefix: "a_" },
+        { name: "Flizza Bianca", model: "Model 3", paint: paint2,  prefix: "b_" }];
+      const st = {
+        "binary_sensor.a_online": { entity_id: "binary_sensor.a_online", state: "on", attributes: {} },
+        "binary_sensor.b_online": { entity_id: "binary_sensor.b_online", state: "on", attributes: {} } };
+      const build = (paint2) => {
+        const c = document.createElement("tesla-fleet-card");
+        document.body.appendChild(c);
+        c.setConfig({ type: "custom:tesla-fleet-card", cars: cars(paint2) });
+        c.hass = { states: st };
+        return c;
+      };
+      const nameOf = (c) => {
+        const n = c.shadowRoot.querySelector("span.nm");
+        return n ? n.textContent.trim() : null;
+      };
+
+      let c = build("grey");
+      c._selectCar(1);
+      R.sel_first_element_shows = nameOf(c);
+      c.remove();                         // exactly what HA does to the preview
+
+      c = build("silver");                // ...and builds a fresh one
+      R.sel_survives_rebuild_sel  = c._sel;
+      R.sel_survives_rebuild_name = nameOf(c);
+      c.remove();
+
+      /* a DIFFERENT card, different cars, must not inherit that selection */
+      const d = document.createElement("tesla-fleet-card");
+      document.body.appendChild(d);
+      d.setConfig({ type: "custom:tesla-fleet-card", cars: [
+        { name: "Other One", model: "Model Y", paint: "red", prefix: "z_" },
+        { name: "Other Two", model: "Model 3", paint: "grey", prefix: "y_" }] });
+      d.hass = { states: { "binary_sensor.z_online": { entity_id: "binary_sensor.z_online", state: "on", attributes: {} } } };
+      R.sel_other_card_unaffected = d._sel;
+      d.remove();
+
+      /* default_car still wins where nothing has been chosen */
+      const e = document.createElement("tesla-fleet-card");
+      document.body.appendChild(e);
+      e.setConfig({ type: "custom:tesla-fleet-card", default_car: 1, cars: [
+        { name: "D one", model: "Model Y", paint: "red", prefix: "q_" },
+        { name: "D two", model: "Model 3", paint: "grey", prefix: "r_" }] });
+      e.hass = { states: { "binary_sensor.q_online": { entity_id: "binary_sensor.q_online", state: "on", attributes: {} } } };
+      R.sel_default_car_still_wins = e._sel;
+      e.remove();
+
+      /* renaming a car must not lose your place: the key is the prefix */
+      let f = document.createElement("tesla-fleet-card");
+      document.body.appendChild(f);
+      f.setConfig({ type: "custom:tesla-fleet-card", cars: [
+        { name: "N one", model: "Model Y", paint: "red", prefix: "m_" },
+        { name: "N two", model: "Model 3", paint: "grey", prefix: "n_" }] });
+      f.hass = { states: { "binary_sensor.m_online": { entity_id: "binary_sensor.m_online", state: "on", attributes: {} } } };
+      f._selectCar(1);
+      f.remove();
+      f = document.createElement("tesla-fleet-card");
+      document.body.appendChild(f);
+      f.setConfig({ type: "custom:tesla-fleet-card", cars: [
+        { name: "N one", model: "Model Y", paint: "red", prefix: "m_" },
+        { name: "N two RENAMED", model: "Model 3", paint: "grey", prefix: "n_" }] });
+      f.hass = { states: { "binary_sensor.m_online": { entity_id: "binary_sensor.m_online", state: "on", attributes: {} } } };
+      R.sel_survives_a_rename = f._sel;
+      f.remove();
+    })();
+
     R.jun_white_geom = geomFor("/local/x/images/models/y/white/app");
     R.jun_blue_geom  = geomFor("/local/x/images/models/y-juniper/blue/app");
     /* the road is measured, not defaulted: a Juniper pack that fell through
@@ -1422,6 +1501,14 @@ function customStates(p) {
   check("both Junipers use one road",         r.jun_blue_geom.roadY, r.jun_white_geom.roadY);
   check("the Juniper road is measured",       r.jun_road_measured, true);
   check("no models/y-juniper-juniper alias",  r.jun_no_double_alias, true);
+
+  console.log("\nthe selected car survives HA rebuilding the element");
+  check("the first element shows the chosen car", r.sel_first_element_shows, "Flizza Bianca");
+  check("a rebuilt element keeps the choice",     r.sel_survives_rebuild_sel, 1);
+  check("and renders it",                         r.sel_survives_rebuild_name, "Flizza Bianca");
+  check("another card is unaffected",             r.sel_other_card_unaffected, 0);
+  check("default_car still wins when unchosen",   r.sel_default_car_still_wins, 1);
+  check("renaming a car does not lose the place", r.sel_survives_a_rename, 1);
 
   console.log("\nevery shipped pack has all three overlays");
   check("the shipped list was found", (r.shipped_dirs || []).length >= 4, true);
