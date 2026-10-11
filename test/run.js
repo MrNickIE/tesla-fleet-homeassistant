@@ -954,6 +954,30 @@ function customStates(p) {
       c.hass = Object.assign({}, c._hass, { states: st });
       R.sentry_parked_again = b ? [b.classList.contains("blocked"), b.querySelector(".lb").textContent] : null;
     })();
+    /* ---- the refresh after a command (issue #7) ---------------------------
+       On tesla_fleet the default refresh entity is Wake, billed at $1 per 50.
+       After a command the car is awake, so one data refresh must do instead.
+       An explicit override, and tesla_custom, keep their two button presses. */
+    (() => {
+      const realST = window.setTimeout;
+      const run = (cars, st) => {
+        const calls = [];
+        const c = mkCard(cars, st);
+        c.hass = { states: st, callService: (d, sv, data) => { calls.push([d, sv, data.entity_id]); return Promise.resolve(); } };
+        window.setTimeout = (fn) => { fn(); return 0; };
+        try { c._nudgeRefresh(); } finally { window.setTimeout = realST; }
+        return calls;
+      };
+      const fst = {
+        "sensor.f_battery_level": { entity_id: "sensor.f_battery_level", state: "60", attributes: {} },
+        "button.f_wake": { entity_id: "button.f_wake", state: "unknown", attributes: {} },
+        "button.f_refresh_data": { entity_id: "button.f_refresh_data", state: "unknown", attributes: {} },
+      };
+      const fcar = { name: "F", model: "Model Y", paint: "red", prefix: "f_", integration: "tesla_fleet" };
+      R.refresh_fleet_default = run([fcar], fst);
+      R.refresh_fleet_override = run([Object.assign({ entities: { refresh: "button.f_refresh_data" } }, fcar)], fst);
+      R.refresh_custom = run([{ name: "C", model: "Model Y", paint: "red", prefix: "c_" }], customStates("c_"));
+    })();
     /* the same leftover "Tap again" was on Honk, Start and Vent too */
     (() => {
       const st = customStates("k_");
@@ -1675,6 +1699,14 @@ function customStates(p) {
   check("the editor has a tick box",           r.sentry_editor_box, "checkbox");
   check("ticking it writes true",              r.sentry_editor_ticked, true);
   check("unticking removes the key",           r.sentry_editor_unticked, false);
+
+  console.log("\nthe refresh after a command (issue #7)");
+  check("tesla_fleet: one data refresh, no wake", r.refresh_fleet_default,
+        [["homeassistant", "update_entity", "sensor.f_battery_level"]]);
+  check("an entities.refresh override is pressed as before", r.refresh_fleet_override,
+        [["button", "press", "button.f_refresh_data"], ["button", "press", "button.f_refresh_data"]]);
+  check("tesla_custom is unchanged", r.refresh_custom,
+        [["button", "press", "button.c_force_data_update"], ["button", "press", "button.c_force_data_update"]]);
 
   console.log("\nheld states while the car wakes");
   check("the open frunk is seen",              r.hold_open_seen, true);

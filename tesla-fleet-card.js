@@ -1384,9 +1384,21 @@
        the next poll. Only ever after a command - never on a timer, because this
        wakes the car and spends API calls. */
     _nudgeRefresh() {
-      const id = this._car && this._car._entities && this._car._entities.refresh;
+      const car = this._car;
+      const id = car && car._entities && car._entities.refresh;
       if (!id || !this._hass) return;
       clearTimeout(this._refT1); clearTimeout(this._refT2);
+      /* On tesla_fleet the default refresh entity is the Wake button, and the
+         Fleet API bills wakes at $1 per 50 - two per tap runs past the $10 a
+         month personal credit quickly. The car has just accepted a command, so
+         it is already awake: one data refresh ($1 per 500) is enough. Issue #7.
+         An `entities: refresh:` override is still pressed exactly as before. */
+      if (car._integration === "tesla_fleet" && !(car.entities && car.entities.refresh)) {
+        const target = car._entities.battery;
+        if (target) this._refT1 = setTimeout(() =>
+          this._call("homeassistant", "update_entity", { entity_id: target }), 8000);
+        return;
+      }
       this._refT1 = setTimeout(() => this._call("button", "press", { entity_id: id }), 4000);
       this._refT2 = setTimeout(() => this._call("button", "press", { entity_id: id }), 11000);
     }
