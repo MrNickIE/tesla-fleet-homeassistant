@@ -217,6 +217,7 @@ Per car:
 | `hide_climate` | Climate features your car lacks, e.g. `hide_climate: [bio]`. Keys: `bio camp pet`. |
 | `show_climate` | Climate features your car has that the card assumed it did not, e.g. `show_climate: [bio]` for a Model 3 with a retrofitted HEPA filter. |
 | `show_sentry` | Adds a Sentry button to the action row, also a tick box in the editor. It pulses red while sentry is on, asks for a second tap before turning it off, and is greyed out while the car is driving, because Tesla does not allow sentry on the move. Off by default. |
+| `refresh_after_command` | After a command, the card asks the car for fresh data twice (at 4 s and 11 s) so the result shows without waiting for the next poll. On tesla_fleet this is a plain data request, not a wake, because Fleet API bills wakes far higher. On by default; `false` turns it off and leaves updates to the integration's own polling. |
 | `generation` | Which body generation this car is, when the model year cannot say: `classic`, `highland` or `juniper`. Only needed for a 2023 Model 3, which could be either, and the visual editor asks you for exactly that car rather than making you come here. |
 | `allow_other_generation` | Use a pack from the other body generation when nothing matches yours. Off by default, because the result is a photograph of a different car. |
 
