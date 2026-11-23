@@ -117,7 +117,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false, map_zoom: 15, location_tap: "map", preview: false };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {}, show_sentry: false };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {}, show_sentry: false, refresh_after_command: true };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -1382,13 +1382,29 @@
     }
     /* Ask the car for fresh data shortly after a command instead of waiting for
        the next poll. Only ever after a command - never on a timer, because this
-       wakes the car and spends API calls. */
+       spends API calls.
+       On tesla_fleet the refresh entity is button.<car>_wake, and Fleet API
+       bills a wake fifty times the price of a data request (issue #7). A car
+       that has just accepted a command is already awake, so a data refresh is
+       all it needs: homeassistant.update_entity on the battery sensor makes
+       the integration fetch vehicle data without sending a wake. A refresh
+       entity set by hand under `entities:` is still pressed as before, and
+       `refresh_after_command: false` turns the nudge off. */
     _nudgeRefresh() {
-      const id = this._car && this._car._entities && this._car._entities.refresh;
-      if (!id || !this._hass) return;
+      const car = this._car;
+      if (!car || !this._hass || car.refresh_after_command === false) return;
+      const ents = car._entities || {};
+      let fire;
+      if (car._integration === "tesla_fleet" && !(car.entities && car.entities.refresh)) {
+        if (!ents.battery) return;
+        fire = () => this._call("homeassistant", "update_entity", { entity_id: ents.battery });
+      } else {
+        if (!ents.refresh) return;
+        fire = () => this._call("button", "press", { entity_id: ents.refresh });
+      }
       clearTimeout(this._refT1); clearTimeout(this._refT2);
-      this._refT1 = setTimeout(() => this._call("button", "press", { entity_id: id }), 4000);
-      this._refT2 = setTimeout(() => this._call("button", "press", { entity_id: id }), 11000);
+      this._refT1 = setTimeout(fire, 4000);
+      this._refT2 = setTimeout(fire, 11000);
     }
 
     /* Measure the car's bounding box in an image, once per URL. Same-origin

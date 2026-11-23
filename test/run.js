@@ -884,6 +884,29 @@ function customStates(p) {
       R.gen_cleared_removes_key = emitted.cars[0].generation === undefined;
     })();
 
+    /* ---- the refresh after a command (issue #7) ------------------------
+       On tesla_fleet the refresh entity is the wake button, and Fleet API
+       bills a wake fifty times a data request. The car has just accepted a
+       command, so it is awake: a data refresh is enough. */
+    (() => {
+      const realTimeout = window.setTimeout;
+      window.setTimeout = (fn) => { fn(); return 0; };
+      const nudge = (car, states) => {
+        const calls = [];
+        const c = mkCard([car], states);
+        c.hass = { states, callService: (d, sv, data) => { calls.push([d, sv, data.entity_id]); return Promise.resolve(); } };
+        c._nudgeRefresh();
+        return calls;
+      };
+      const fl = { "sensor.r_battery_level": { state: "50", attributes: {}, entity_id: "sensor.r_battery_level" } };
+      const base = { name: "R", model: "Model 3", paint: "grey", prefix: "r_" };
+      R.refresh_fleet = nudge(Object.assign({}, base), fl);
+      R.refresh_fleet_manual = nudge(Object.assign({ entities: { refresh: "button.r_force" } }, base), fl);
+      R.refresh_fleet_off = nudge(Object.assign({ refresh_after_command: false }, base), fl);
+      R.refresh_custom = nudge({ name: "C", model: "Model Y", paint: "red", prefix: "c_" }, customStates("c_"));
+      window.setTimeout = realTimeout;
+    })();
+
     /* ---- the Sentry button (from discussion #6) ------------------------
        Opt-in per car, so nobody's action row changes on update. Turning it
        on is one tap; turning it off, which leaves the car unwatched, asks
@@ -1653,6 +1676,15 @@ function customStates(p) {
   check("an answered car keeps the field", r.gen_field_sticks, true);
   check("the answer is shown as selected", r.gen_field_selected, "classic");
   check("clearing it removes the key",     r.gen_cleared_removes_key, true);
+
+  console.log("\nthe refresh after a command");
+  check("tesla_fleet refreshes data, never wakes", r.refresh_fleet,
+    [["homeassistant", "update_entity", "sensor.r_battery_level"], ["homeassistant", "update_entity", "sensor.r_battery_level"]]);
+  check("a hand-set refresh entity is still pressed", r.refresh_fleet_manual,
+    [["button", "press", "button.r_force"], ["button", "press", "button.r_force"]]);
+  check("refresh_after_command: false turns it off", r.refresh_fleet_off, []);
+  check("tesla_custom keeps force_data_update",  r.refresh_custom,
+    [["button", "press", "button.c_force_data_update"], ["button", "press", "button.c_force_data_update"]]);
 
   console.log("\nthe Sentry button");
   check("not there unless show_sentry",        r.sentry_absent_by_default, false);
